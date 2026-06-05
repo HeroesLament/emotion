@@ -1,0 +1,43 @@
+# ---- Elixir / Mix build artifacts ----
+# Compiled output and fetched deps (umbrella root + nested per-app copies)
+/_build/
+/deps/
+**/_build/
+**/deps/
+
+# Mix fetch cache
+/.fetch
+**/.fetch
+
+# Crash dumps
+erl_crash.dump
+
+# Generated docs (ExDoc)
+/doc/
+**/doc/
+
+# Test coverage output
+/cover/
+**/cover/
+
+# ---- Tooling / editor caches ----
+# ElixirLS language server cache
+/.elixir_ls/
+**/.elixir_ls/
+.elixir-tools/
+
+# ---- Secrets / local env ----
+**/*.secret.exs
+.env
+
+# ---- OS cruft ----
+.DS_Store
+**/.DS_Store
+
+# ---- Project-specific build/export artifacts ----
+# HMI export bundle (regenerated; not source)
+exmo_hmi.zip
+*.zip
+
+# Stray compiled BEAM files outside _build
+*.beam

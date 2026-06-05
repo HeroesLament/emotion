@@ -1,0 +1,6 @@
+%{
+  "asciichart": {:hex, :asciichart, "1.2.0", "4163eccf18793f5701ba4656f04803019a469d2fb98e6615803cda677afce8d9", [:mix], [], "hexpm", "28a870099bf7c6f6367953874f53445e4a882566dd8ac2e9e701989f967d374d"},
+  "castore": {:hex, :castore, "1.0.17", "4f9770d2d45fbd91dcf6bd404cf64e7e58fed04fadda0923dc32acca0badffa2", [:mix], [], "hexpm", "12d24b9d80b910dd3953e165636d68f147a31db945d2dcb9365e441f8b5351e5"},
+  "ex_ratatui": {:hex, :ex_ratatui, "0.4.2", "98692d45c359211dd781c9f0dda2cbdda5fecaae1473b3dc2eae9deeb613be57", [:mix], [{:rustler, ">= 0.0.0", [hex: :rustler, repo: "hexpm", optional: true]}, {:rustler_precompiled, "~> 0.8", [hex: :rustler_precompiled, repo: "hexpm", optional: false]}], "hexpm", "7a4954d762b103ece8d79caf50f31319c43646d33ba46a333b90a29c2bb080d4"},
+  "rustler_precompiled": {:hex, :rustler_precompiled, "0.8.4", "700a878312acfac79fb6c572bb8b57f5aae05fe1cf70d34b5974850bbf2c05bf", [:mix], [{:castore, "~> 0.1 or ~> 1.0", [hex: :castore, repo: "hexpm", optional: false]}, {:rustler, "~> 0.23", [hex: :rustler, repo: "hexpm", optional: true]}], "hexpm", "3b33d99b540b15f142ba47944f7a163a25069f6d608783c321029bc1ffb09514"},
+}
