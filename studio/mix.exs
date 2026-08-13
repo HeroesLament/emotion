@@ -31,7 +31,7 @@ defmodule EMotion.MixProject do
   defp deps do
     [
       {:exmove, path: "../apps/exmove"},
-      {:wx_mvu, path: "../../wx_mvu"}
+      {:cedar, path: "../../cedar"}
     ]
   end
 end

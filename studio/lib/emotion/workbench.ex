@@ -111,14 +111,14 @@ defmodule EMotion.Workbench do
   Widget intents for this workbench's panel.
 
   Composed into the shell's declaration, so the same rules apply as any
-  `wx_mvu` scene: pure, cheap, and a function of state.
+  `cedar` scene: pure, cheap, and a function of state.
   """
   @callback view(state(), context()) :: [tuple()]
 
   @doc """
   Layers this workbench contributes to the 3D viewport.
 
-  A keyword list in `WxMVU.Visual.Layers` form, appended after the shell's own,
+  A keyword list in `Cedar.Visual.Layers` form, appended after the shell's own,
   so a welding bench can draw its seam path over the cell without owning the
   viewport.
   """

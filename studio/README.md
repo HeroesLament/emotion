@@ -29,7 +29,7 @@ mix test
 ```
 
 Requires an Erlang built with wxWidgets and an OpenGL 4.1 driver — see
-`wx_mvu`'s README, which this depends on for rendering.
+`cedar`'s README, which this depends on for rendering.
 
 ## Units
 
@@ -53,16 +53,16 @@ crossing that boundary is never a conversion.
 Roughly in order, and none of it is built yet:
 
 1. **Transform hierarchy** — a kinematic tree the renderer walks, so setting
-   joint three moves everything downstream of it. `wx_mvu`'s `:layers` is
+   joint three moves everything downstream of it. `cedar`'s `:layers` is
    deliberately not a scene graph; this needs one.
 2. **Model loading** — binary STL first, since that is what most robot
-   description packages ship, baked to a compressed term the way `wx_mvu` bakes
+   description packages ship, baked to a compressed term the way `cedar` bakes
    its font, so opening a cell does not mean parsing meshes.
 3. **Picking** — unproject a screen ray, intersect it with link bounds, so an
    operator can click a joint. Needs a 4x4 inverse, which the math layer does
    not have yet.
 4. **Camera** — orbit, pan, dolly, and the standard iso/top/front views. Pure
-   model state driven by the mouse events `wx_mvu` already delivers.
+   model state driven by the mouse events `cedar` already delivers.
 5. **Frames** — named coordinate frames and the transforms between them. A
    number can be in metres and still be measured from the wrong origin, which
    is the other half of the problem `EMotion.Units` solves half of.

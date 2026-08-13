@@ -10,7 +10,7 @@ defmodule EMotion.Job do
 
   ## The problem this exists for
 
-  A `wx_mvu` scene is a GenServer. It handles one event at a time, and
+  A `cedar` scene is a GenServer. It handles one event at a time, and
   `view/1` runs inside it. Anything slow that happens in `handle_event/2`
   freezes the entire window — not the panel, not the viewport, the window —
   because nothing else can be processed until it returns.
