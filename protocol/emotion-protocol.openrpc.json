@@ -1,0 +1,944 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "E-Motion Controller Protocol",
+    "version": "0.1.0",
+    "description": "The contract between E-Motion Studio and an E-Motion robot controller.\n\n## Layering\n\nThis document describes the JSON-RPC 2.0 method surface only. The full stack is:\n\n  - RFC 6455 WebSocket for transport, framing, and liveness. Liveness is the\n    standard ping/pause frame pair at the transport layer; there is deliberately\n    no application-level heartbeat method.\n  - JSON-RPC 2.0 for envelope, correlation, and errors.\n  - This document (OpenRPC 1.4) for the interface contract.\n\nBulk transfer - program upload, log and trace download, firmware - is NOT here.\nIt is served over plain HTTP on the same host so that it stays curl-able and does\nnot occupy the live link. See `x-bulkTransfer` below.\n\n## Who may call what\n\nMost methods are Studio to controller. Methods marked\n`x-messageDirection: serverToClient` are sent by the controller and are always\nJSON-RPC notifications (no `id`, no response). OpenRPC 1.4 has no first-class\nrepresentation for server-initiated messages, so they are declared as methods\nwith a null result and tagged with an extension field. This is a known gap in\nOpenRPC, not an accident of this document.\n\n## Units\n\nEvery quantity on the wire is SI. Lengths are metres, angles are radians, time is\nseconds, and rates are per second. There is no unit field anywhere in this\nprotocol and there must never be one - the unit is carried by the schema type\nname. Conversion to and from display units is a presentation concern and belongs\nin the client.\n\n## What this protocol is not\n\nIt is not a safety function. `motion/stop` is a convenience that asks a working\ncontroller over a working network to decelerate. The safety-rated stop is a\nphysical circuit that keeps working when this link is dead, the controller has\nwedged, and the switch has been unplugged. Nothing in this document may be\nrelied upon to prevent injury.\n\nIt is also not a servo loop. Trajectory execution happens entirely on the\ncontroller. The Studio starts and stops motions and observes them; it is never\nbetween the planner and the drives. A Studio that disconnects mid-motion must be\na non-event for the robot.",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    }
+  },
+  "servers": [
+    {
+      "name": "controller",
+      "summary": "A controller on the local network",
+      "description": "Controllers advertise themselves over mDNS as `_emotion._tcp`. The\nStudio browses for them rather than asking the operator for an address.",
+      "url": "ws://{host}:{port}/rpc",
+      "variables": {
+        "host": {
+          "default": "emotion.local",
+          "description": "Hostname or address of the controller."
+        },
+        "port": {
+          "default": "4000",
+          "description": "TCP port of the controller's WebSocket endpoint."
+        }
+      }
+    }
+  ],
+  "x-bulkTransfer": {
+    "description": "Large or infrequent payloads are served over HTTP on the same host, not over this link.",
+    "endpoints": {
+      "GET /api/programs/{id}": "Download a program source.",
+      "PUT /api/programs/{id}": "Upload or replace a program source.",
+      "GET /api/logs": "Download the controller log.",
+      "GET /api/traces/{motionId}": "Download the full-rate trace of a completed motion.",
+      "GET /api/health": "Unauthenticated liveness check."
+    }
+  },
+  "x-conflation": {
+    "description": "Subscription streams are conflated, never queued. When the client is slower than the stream rate the controller REPLACES the pending frame rather than buffering behind it, so the client always receives the most recent state and never falls progressively further behind. Dropped intermediate frames are expected and are not an error. This is a stated property of the protocol: an implementation that buffers stream frames is non-conformant. Events (`notifications/events/emitted`) are NOT conflated - see `events/since`.",
+    "appliesTo": ["notifications/streams/update"]
+  },
+  "methods": [
+    {
+      "name": "initialize",
+      "summary": "Negotiate protocol version and capabilities.",
+      "description": "The first message on every connection. No other method may be called until\nthis has returned and the client has sent `notifications/initialized`.\n\nThe client offers the newest protocol version it speaks. If the controller\nspeaks that version it echoes it back. If it does not, it returns the newest\nversion it does speak, and the client decides whether it can proceed or must\ntell the operator to update something. The controller never guesses.\n\nCapabilities exist so that a newer Studio can discover what an older controller\nsupports without probing for it and interpreting the failures.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "protocolVersion",
+          "summary": "Newest protocol version the client speaks.",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/ProtocolVersion" }
+        },
+        {
+          "name": "clientInfo",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/PeerInfo" }
+        },
+        {
+          "name": "capabilities",
+          "summary": "What the client is able to receive.",
+          "required": false,
+          "schema": { "$ref": "#/components/schemas/ClientCapabilities" }
+        }
+      ],
+      "result": {
+        "name": "initializeResult",
+        "schema": {
+          "type": "object",
+          "required": ["protocolVersion", "serverInfo", "capabilities"],
+          "additionalProperties": false,
+          "properties": {
+            "protocolVersion": { "$ref": "#/components/schemas/ProtocolVersion" },
+            "serverInfo": { "$ref": "#/components/schemas/PeerInfo" },
+            "capabilities": { "$ref": "#/components/schemas/ServerCapabilities" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/UnsupportedProtocolVersion" },
+        { "$ref": "#/components/errors/AlreadyInitialized" }
+      ],
+      "examples": [
+        {
+          "name": "studioConnects",
+          "params": [
+            { "name": "protocolVersion", "value": "2026-08-14" },
+            { "name": "clientInfo", "value": { "name": "E-Motion Studio", "version": "0.1.0" } },
+            { "name": "capabilities", "value": { "streams": {}, "progress": {} } }
+          ],
+          "result": {
+            "name": "initializeResult",
+            "value": {
+              "protocolVersion": "2026-08-14",
+              "serverInfo": { "name": "E-Motion Controller", "version": "0.1.0" },
+              "capabilities": {
+                "streams": { "maxRateHz": 100, "available": ["joint_state", "tcp_pose", "drive_status", "io"] },
+                "motion": { "jog": true, "moveJoint": true, "moveLinear": false },
+                "programs": { "run": true },
+                "events": { "replayDepth": 4096 },
+                "progress": {},
+                "cancellation": {}
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "notifications/initialized",
+      "summary": "Client acknowledges the negotiated session.",
+      "description": "Sent as a JSON-RPC notification once the client has accepted the result of\n`initialize`. The controller treats the session as usable from this point.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": { "name": "null", "schema": { "type": "null" } },
+      "x-notification": true,
+      "x-messageDirection": "clientToServer"
+    },
+    {
+      "name": "robot/describe",
+      "summary": "Static description of the robot: kinematics, limits, frames.",
+      "description": "Everything that does not change while the controller is running. The Studio\nfetches this once after initialize and caches it. If it ever does change - a\ntool is reconfigured, a joint limit is edited - the controller emits\n`notifications/robot/describeChanged` and the Studio refetches.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "robotDescription",
+        "schema": { "$ref": "#/components/schemas/RobotDescription" }
+      },
+      "errors": [{ "$ref": "#/components/errors/NotInitialized" }]
+    },
+    {
+      "name": "notifications/robot/describeChanged",
+      "summary": "The static description is stale; refetch it.",
+      "description": "Deliberately carries no payload. The Studio calls `robot/describe` again\nrather than trying to apply a diff, because the description is small and a\nwrong diff is worse than a redundant fetch.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": { "name": "null", "schema": { "type": "null" } },
+      "x-notification": true,
+      "x-messageDirection": "serverToClient"
+    },
+    {
+      "name": "robot/state",
+      "summary": "One-shot current state.",
+      "description": "For clients that want a snapshot without subscribing - a script, a health\ncheck, a freshly opened panel. Anything drawing continuously should subscribe\ninstead of polling this.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "robotState",
+        "schema": { "$ref": "#/components/schemas/RobotState" }
+      },
+      "errors": [{ "$ref": "#/components/errors/NotInitialized" }]
+    },
+    {
+      "name": "streams/subscribe",
+      "summary": "Subscribe to one or more conflated state streams.",
+      "description": "The returned `subscriptionId` is the topic handle: every\n`notifications/streams/update` carries it, and it is what you pass to\n`streams/unsubscribe`.\n\nThe requested rate is advisory. The controller returns the rate it will\nactually send at, which may be lower - it will not exceed the `maxRateHz` it\nadvertised at initialize, and it may reduce further under load. Clients must\nread the granted rate rather than assuming they got what they asked for.\n\nStreams are conflated. See `x-conflation` at the top of this document; the\nsummary is that a slow client receives the newest frame and misses the ones in\nbetween, by design.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "streams",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/components/schemas/StreamName" }
+          }
+        },
+        {
+          "name": "rateHz",
+          "summary": "Requested update rate. Advisory; see the granted rate in the result.",
+          "required": false,
+          "schema": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000, "default": 30 }
+        }
+      ],
+      "result": {
+        "name": "subscription",
+        "schema": {
+          "type": "object",
+          "required": ["subscriptionId", "streams", "rateHz"],
+          "additionalProperties": false,
+          "properties": {
+            "subscriptionId": { "$ref": "#/components/schemas/SubscriptionId" },
+            "streams": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/StreamName" }
+            },
+            "rateHz": {
+              "type": "number",
+              "description": "The rate the controller will actually send at."
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/UnknownStream" },
+        { "$ref": "#/components/errors/TooManySubscriptions" }
+      ],
+      "examples": [
+        {
+          "name": "viewportSubscribesAtDisplayRate",
+          "params": [
+            { "name": "streams", "value": ["joint_state"] },
+            { "name": "rateHz", "value": 30 }
+          ],
+          "result": {
+            "name": "subscription",
+            "value": { "subscriptionId": "sub_01J8...", "streams": ["joint_state"], "rateHz": 30 }
+          }
+        }
+      ]
+    },
+    {
+      "name": "streams/unsubscribe",
+      "summary": "End a subscription.",
+      "description": "Idempotent: unsubscribing an unknown or already-ended subscription succeeds.\nA client tearing down after a reconnect should not have to reason about whether\nthe controller already dropped it.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "subscriptionId",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/SubscriptionId" }
+        }
+      ],
+      "result": {
+        "name": "ok",
+        "schema": { "type": "object", "additionalProperties": false, "properties": {} }
+      },
+      "errors": [{ "$ref": "#/components/errors/NotInitialized" }]
+    },
+    {
+      "name": "notifications/streams/update",
+      "summary": "A conflated state frame.",
+      "description": "Carries the newest value of one stream. `seq` is monotonic per subscription\nand per stream, and it SKIPS - a gap means frames were conflated away, which is\nnormal and must not be treated as an error or trigger a resync. If you need\nevery sample, download the trace over HTTP after the motion completes.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "subscriptionId",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/SubscriptionId" }
+        },
+        {
+          "name": "stream",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/StreamName" }
+        },
+        {
+          "name": "seq",
+          "summary": "Monotonic, with gaps where frames were conflated away.",
+          "required": true,
+          "schema": { "type": "integer", "minimum": 0 }
+        },
+        {
+          "name": "timestamp",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Timestamp" }
+        },
+        {
+          "name": "data",
+          "summary": "Shape depends on `stream`.",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/StreamPayload" }
+        }
+      ],
+      "result": { "name": "null", "schema": { "type": "null" } },
+      "x-notification": true,
+      "x-messageDirection": "serverToClient"
+    },
+    {
+      "name": "notifications/events/emitted",
+      "summary": "A discrete event: fault, mode change, program lifecycle.",
+      "description": "Events are NOT conflated and must not be lost. Every event carries a\nmonotonic `seq` with no gaps. A client that sees a gap has missed events and\nmust call `events/since` to fill it - that is the entire reason the sequence\nnumber exists.\n\nA fault is an event, not a stream. Never infer a fault from the absence of a\nstream frame.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "event",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Event" }
+        }
+      ],
+      "result": { "name": "null", "schema": { "type": "null" } },
+      "x-notification": true,
+      "x-messageDirection": "serverToClient"
+    },
+    {
+      "name": "events/since",
+      "summary": "Replay events the client missed.",
+      "description": "Called after a reconnect, or on noticing a gap in event sequence numbers.\nReturns every event with `seq` strictly greater than the one supplied, oldest\nfirst.\n\nThe controller keeps a bounded replay buffer whose depth it advertised at\ninitialize. If the requested sequence has fallen out of it, this fails with\n`SequenceUnavailable` rather than silently returning a partial history - a\nclient that cannot prove it has seen every fault must say so to the operator\nrather than pretend.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "seq",
+          "summary": "Last sequence number the client has definitely seen.",
+          "required": true,
+          "schema": { "type": "integer", "minimum": 0 }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 256 }
+        }
+      ],
+      "result": {
+        "name": "replay",
+        "schema": {
+          "type": "object",
+          "required": ["events", "latestSeq", "complete"],
+          "additionalProperties": false,
+          "properties": {
+            "events": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/Event" }
+            },
+            "latestSeq": {
+              "type": "integer",
+              "description": "Newest sequence number the controller holds."
+            },
+            "complete": {
+              "type": "boolean",
+              "description": "False when `limit` truncated the reply; call again from the last returned seq."
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/SequenceUnavailable" }
+      ]
+    },
+    {
+      "name": "motion/jog",
+      "summary": "Jog a single joint under a deadman timeout.",
+      "description": "Deliberately self-cancelling. The controller decelerates to a stop when\n`timeout` elapses without a further jog call for the same joint, so a Studio\nthat crashes, a laptop lid that closes, or a network that drops mid-jog leaves\nthe robot stationary rather than moving.\n\nThe client refreshes by calling again while the operator holds the control.\n`motion/stop` ends it early. There is no separate jog-stop method, because a\nprotocol where stopping requires a message to arrive is a protocol where\nstopping fails when the message does not.\n\nThis is a convenience for operators at a keyboard. It is not a safety function.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "joint",
+          "summary": "Joint id from `robot/describe`.",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "velocity",
+          "summary": "Signed. Magnitude is clamped to the joint's configured jog limit.",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/RadiansPerSecond" }
+        },
+        {
+          "name": "timeout",
+          "summary": "Deadman interval. The controller stops if not refreshed within this.",
+          "required": false,
+          "schema": { "$ref": "#/components/schemas/Seconds" }
+        }
+      ],
+      "result": {
+        "name": "jogAccepted",
+        "schema": {
+          "type": "object",
+          "required": ["expiresAt", "velocity"],
+          "additionalProperties": false,
+          "properties": {
+            "expiresAt": { "$ref": "#/components/schemas/Timestamp" },
+            "velocity": {
+              "$ref": "#/components/schemas/RadiansPerSecond",
+              "description": "The velocity actually applied, after clamping."
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/RobotNotReady" },
+        { "$ref": "#/components/errors/SafetyStopActive" },
+        { "$ref": "#/components/errors/UnknownJoint" },
+        { "$ref": "#/components/errors/MotionInProgress" }
+      ]
+    },
+    {
+      "name": "motion/moveJoint",
+      "summary": "Move to a joint configuration.",
+      "description": "Returns as soon as the motion is accepted and planned, not when it finishes.\nProgress arrives as `notifications/progress` against the `progressToken`, and\ncompletion arrives as an event. The call may be cancelled with\n`notifications/cancelled` carrying this request's id.\n\nThe target is validated against joint limits before acceptance, so an\nout-of-range target is an error rather than a motion that faults partway.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "target",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/JointVector" }
+        },
+        {
+          "name": "maxVelocity",
+          "summary": "Per-joint ceiling. Clamped to configured limits.",
+          "required": false,
+          "schema": { "$ref": "#/components/schemas/RadiansPerSecond" }
+        },
+        {
+          "name": "maxAcceleration",
+          "required": false,
+          "schema": { "$ref": "#/components/schemas/RadiansPerSecondSquared" }
+        },
+        {
+          "name": "progressToken",
+          "summary": "Opaque client token echoed in progress notifications.",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "motionAccepted",
+        "schema": {
+          "type": "object",
+          "required": ["motionId", "estimatedDuration"],
+          "additionalProperties": false,
+          "properties": {
+            "motionId": { "type": "string" },
+            "estimatedDuration": { "$ref": "#/components/schemas/Seconds" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/RobotNotReady" },
+        { "$ref": "#/components/errors/SafetyStopActive" },
+        { "$ref": "#/components/errors/LimitExceeded" },
+        { "$ref": "#/components/errors/MotionInProgress" }
+      ]
+    },
+    {
+      "name": "motion/stop",
+      "summary": "Ask the controller to stop moving. NOT a safety function.",
+      "description": "`controlled` decelerates on the planned path and leaves the servos enabled.\n`immediate` decelerates at the drives' maximum rate, which may deviate from the\npath.\n\nRead this twice: this method asks a working controller, over a working network,\nto stop. It cannot help when the controller has wedged, the link is down, or\nthe operator is in the cell. The safety-rated stop is a physical circuit and\nthis method is not a substitute for it, an implementation of it, or a fallback\nfor it.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "mode",
+          "required": false,
+          "schema": { "type": "string", "enum": ["controlled", "immediate"], "default": "controlled" }
+        }
+      ],
+      "result": {
+        "name": "ok",
+        "schema": { "type": "object", "additionalProperties": false, "properties": {} }
+      },
+      "errors": [{ "$ref": "#/components/errors/NotInitialized" }]
+    },
+    {
+      "name": "programs/list",
+      "summary": "List programs stored on the controller.",
+      "description": "Metadata only. Source is fetched over HTTP - see `x-bulkTransfer`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "cursor",
+          "summary": "Opaque cursor from a previous reply.",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "programs",
+        "schema": {
+          "type": "object",
+          "required": ["programs"],
+          "additionalProperties": false,
+          "properties": {
+            "programs": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/ProgramSummary" }
+            },
+            "nextCursor": { "type": "string" }
+          }
+        }
+      },
+      "errors": [{ "$ref": "#/components/errors/NotInitialized" }]
+    },
+    {
+      "name": "programs/run",
+      "summary": "Start a stored program.",
+      "description": "Returns when the program has been accepted and started, not when it\ncompletes. Lifecycle arrives as events and progress as\n`notifications/progress`.\n\nThe program runs entirely on the controller. If the Studio disconnects the\nprogram continues - which is the correct behaviour for offline programming and\nthe reason this is not a streaming call.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "programId",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "progressToken",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "runAccepted",
+        "schema": {
+          "type": "object",
+          "required": ["runId"],
+          "additionalProperties": false,
+          "properties": {
+            "runId": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotInitialized" },
+        { "$ref": "#/components/errors/RobotNotReady" },
+        { "$ref": "#/components/errors/SafetyStopActive" },
+        { "$ref": "#/components/errors/ProgramNotFound" },
+        { "$ref": "#/components/errors/MotionInProgress" }
+      ]
+    },
+    {
+      "name": "notifications/progress",
+      "summary": "Progress of a long-running request.",
+      "description": "Echoes the `progressToken` supplied by the caller. `total` may be absent\nwhen the controller cannot know the extent in advance.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "progressToken",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "progress",
+          "required": true,
+          "schema": { "type": "number", "minimum": 0 }
+        },
+        {
+          "name": "total",
+          "required": false,
+          "schema": { "type": "number", "minimum": 0 }
+        },
+        {
+          "name": "message",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": { "name": "null", "schema": { "type": "null" } },
+      "x-notification": true,
+      "x-messageDirection": "serverToClient"
+    },
+    {
+      "name": "notifications/cancelled",
+      "summary": "Cancel an in-flight request.",
+      "description": "Best effort. The request may already have completed, in which case this is\nignored. A cancelled motion decelerates in the same way as\n`motion/stop` with mode `controlled`.\n\nThe controller does not send a JSON-RPC response for a request cancelled this\nway; the client must treat the cancellation as terminal for that id.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "requestId",
+          "summary": "The `id` of the JSON-RPC request being cancelled.",
+          "required": true,
+          "schema": { "type": ["string", "integer"] }
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": { "name": "null", "schema": { "type": "null" } },
+      "x-notification": true,
+      "x-messageDirection": "clientToServer"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "ProtocolVersion": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "Date-stamped protocol revision, e.g. `2026-08-14`. Compared for equality,\nnot ordered - a controller either speaks a revision or it does not.",
+        "examples": ["2026-08-14"]
+      },
+      "PeerInfo": {
+        "type": "object",
+        "required": ["name", "version"],
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": "string" }
+        }
+      },
+      "ClientCapabilities": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Presence of a key means the client supports the feature. Empty objects are\ndeliberate: they leave room for per-feature options later without a breaking\nchange.",
+        "properties": {
+          "streams": { "type": "object", "additionalProperties": true },
+          "progress": { "type": "object", "additionalProperties": true },
+          "cancellation": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "ServerCapabilities": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "streams": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "maxRateHz": { "type": "number" },
+              "available": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/StreamName" }
+              }
+            }
+          },
+          "motion": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "jog": { "type": "boolean" },
+              "moveJoint": { "type": "boolean" },
+              "moveLinear": { "type": "boolean" }
+            }
+          },
+          "programs": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": { "run": { "type": "boolean" } }
+          },
+          "events": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "replayDepth": {
+                "type": "integer",
+                "description": "How many events the controller retains for `events/since`."
+              }
+            }
+          },
+          "progress": { "type": "object", "additionalProperties": true },
+          "cancellation": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "Metres": {
+        "type": "number",
+        "description": "Length in metres. SI on the wire, always."
+      },
+      "Radians": {
+        "type": "number",
+        "description": "Angle in radians. SI on the wire, always."
+      },
+      "RadiansPerSecond": {
+        "type": "number",
+        "description": "Angular velocity in radians per second."
+      },
+      "RadiansPerSecondSquared": {
+        "type": "number",
+        "description": "Angular acceleration in radians per second squared."
+      },
+      "NewtonMetres": {
+        "type": "number",
+        "description": "Torque in newton-metres."
+      },
+      "Seconds": {
+        "type": "number",
+        "description": "Duration in seconds."
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "RFC 3339 with at least millisecond precision, from the controller's clock.\nClients must not assume the controller's clock agrees with their own; use it for\nordering and for measuring intervals, not for absolute correlation with desktop\nevents.",
+        "examples": ["2026-08-14T21:09:03.412Z"]
+      },
+      "JointVector": {
+        "type": "array",
+        "description": "Joint positions in the order given by `robot/describe`. Length always equals\nthe robot's degrees of freedom.",
+        "items": { "$ref": "#/components/schemas/Radians" }
+      },
+      "Pose": {
+        "type": "object",
+        "description": "A rigid transform. Rotation is intrinsic RPY about X, Y, then Z, matching\nthe convention used throughout E-Motion. Stated here explicitly because a pose\nwith an unstated rotation convention is a defect waiting to happen.",
+        "required": ["x", "y", "z", "rx", "ry", "rz"],
+        "additionalProperties": false,
+        "properties": {
+          "x": { "$ref": "#/components/schemas/Metres" },
+          "y": { "$ref": "#/components/schemas/Metres" },
+          "z": { "$ref": "#/components/schemas/Metres" },
+          "rx": { "$ref": "#/components/schemas/Radians" },
+          "ry": { "$ref": "#/components/schemas/Radians" },
+          "rz": { "$ref": "#/components/schemas/Radians" }
+        }
+      },
+      "JointDescription": {
+        "type": "object",
+        "required": ["id", "name", "type", "axis", "origin", "limits"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["revolute", "prismatic", "fixed"] },
+          "axis": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": { "type": "number" },
+            "description": "Unit axis of rotation or translation in the joint's own frame."
+          },
+          "origin": { "$ref": "#/components/schemas/Pose" },
+          "limits": {
+            "type": "object",
+            "required": ["min", "max"],
+            "additionalProperties": false,
+            "properties": {
+              "min": { "$ref": "#/components/schemas/Radians" },
+              "max": { "$ref": "#/components/schemas/Radians" },
+              "maxVelocity": { "$ref": "#/components/schemas/RadiansPerSecond" },
+              "maxJogVelocity": { "$ref": "#/components/schemas/RadiansPerSecond" }
+            }
+          }
+        }
+      },
+      "RobotDescription": {
+        "type": "object",
+        "required": ["id", "name", "dof", "joints", "baseFrame", "toolFrame"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "model": { "type": "string" },
+          "dof": { "type": "integer", "minimum": 1 },
+          "joints": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/JointDescription" }
+          },
+          "baseFrame": {
+            "$ref": "#/components/schemas/Pose",
+            "description": "Robot base relative to the cell origin."
+          },
+          "toolFrame": {
+            "$ref": "#/components/schemas/Pose",
+            "description": "Tool centre point relative to the final link."
+          }
+        }
+      },
+      "RobotMode": {
+        "type": "string",
+        "enum": ["idle", "jogging", "moving", "running", "faulted", "estopped", "disabled"],
+        "description": "`estopped` reflects an observed hardware state. It is reported, never\ncommanded - nothing in this protocol may assert or clear it."
+      },
+      "RobotState": {
+        "type": "object",
+        "required": ["timestamp", "mode", "servoEnabled", "estop", "joints"],
+        "additionalProperties": false,
+        "properties": {
+          "timestamp": { "$ref": "#/components/schemas/Timestamp" },
+          "mode": { "$ref": "#/components/schemas/RobotMode" },
+          "servoEnabled": { "type": "boolean" },
+          "estop": {
+            "type": "boolean",
+            "description": "True when the safety circuit is open. Observed, not commanded."
+          },
+          "joints": { "$ref": "#/components/schemas/JointVector" },
+          "velocities": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/RadiansPerSecond" }
+          },
+          "torques": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/NewtonMetres" }
+          },
+          "tcp": { "$ref": "#/components/schemas/Pose" },
+          "activeFaults": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Event" }
+          }
+        }
+      },
+      "StreamName": {
+        "type": "string",
+        "enum": ["joint_state", "tcp_pose", "drive_status", "io"]
+      },
+      "StreamPayload": {
+        "description": "Discriminated by the `stream` field of the enclosing notification.",
+        "oneOf": [
+          {
+            "title": "joint_state",
+            "type": "object",
+            "required": ["positions"],
+            "additionalProperties": false,
+            "properties": {
+              "positions": { "$ref": "#/components/schemas/JointVector" },
+              "velocities": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/RadiansPerSecond" }
+              },
+              "torques": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/NewtonMetres" }
+              }
+            }
+          },
+          {
+            "title": "tcp_pose",
+            "type": "object",
+            "required": ["pose"],
+            "additionalProperties": false,
+            "properties": {
+              "pose": { "$ref": "#/components/schemas/Pose" }
+            }
+          },
+          {
+            "title": "drive_status",
+            "type": "object",
+            "required": ["drives"],
+            "additionalProperties": false,
+            "properties": {
+              "drives": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "enabled"],
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "enabled": { "type": "boolean" },
+                    "temperature": { "type": "number", "description": "Kelvin." },
+                    "current": { "type": "number", "description": "Amperes." }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "io",
+            "type": "object",
+            "required": ["inputs", "outputs"],
+            "additionalProperties": false,
+            "properties": {
+              "inputs": { "type": "object", "additionalProperties": { "type": "boolean" } },
+              "outputs": { "type": "object", "additionalProperties": { "type": "boolean" } }
+            }
+          }
+        ]
+      },
+      "EventSeverity": {
+        "type": "string",
+        "enum": ["info", "warning", "fault", "critical"]
+      },
+      "Event": {
+        "type": "object",
+        "required": ["seq", "timestamp", "severity", "code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Monotonic and gapless. A gap means the client missed events; call\n`events/since`."
+          },
+          "timestamp": { "$ref": "#/components/schemas/Timestamp" },
+          "severity": { "$ref": "#/components/schemas/EventSeverity" },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable identifier, e.g. `drive.overtemperature`. Clients\nbranch on this, never on `message`."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable, may be localised, may change between firmware versions."
+          },
+          "source": { "type": "string" },
+          "active": {
+            "type": "boolean",
+            "description": "For latching faults: whether the condition is still present."
+          },
+          "data": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "ProgramSummary": {
+        "type": "object",
+        "required": ["id", "name", "modified"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "modified": { "$ref": "#/components/schemas/Timestamp" },
+          "checksum": { "type": "string" }
+        }
+      },
+      "SubscriptionId": {
+        "type": "string",
+        "description": "Opaque handle. Also serves as the topic identifier - there is no separate\ntopic concept in this protocol."
+      }
+    },
+    "errors": {
+      "NotInitialized": {
+        "code": -32000,
+        "message": "Session not initialized; call initialize first."
+      },
+      "AlreadyInitialized": {
+        "code": -32001,
+        "message": "Session already initialized on this connection."
+      },
+      "UnsupportedProtocolVersion": {
+        "code": -32002,
+        "message": "No mutually supported protocol version.",
+        "data": {
+          "supported": ["2026-08-14"]
+        }
+      },
+      "RobotNotReady": {
+        "code": -32003,
+        "message": "Robot is not in a state that accepts this command."
+      },
+      "SafetyStopActive": {
+        "code": -32004,
+        "message": "Safety circuit is open; motion commands are refused."
+      },
+      "LimitExceeded": {
+        "code": -32005,
+        "message": "Requested target or rate exceeds a configured limit."
+      },
+      "MotionInProgress": {
+        "code": -32006,
+        "message": "Another motion is executing; stop or cancel it first."
+      },
+      "UnknownJoint": {
+        "code": -32007,
+        "message": "No such joint on this robot."
+      },
+      "UnknownStream": {
+        "code": -32008,
+        "message": "No such stream on this controller."
+      },
+      "TooManySubscriptions": {
+        "code": -32009,
+        "message": "Subscription limit reached for this connection."
+      },
+      "SequenceUnavailable": {
+        "code": -32010,
+        "message": "Requested sequence has fallen out of the replay buffer.",
+        "data": {
+          "oldestAvailableSeq": 0
+        }
+      },
+      "ProgramNotFound": {
+        "code": -32011,
+        "message": "No such program on this controller."
+      }
+    }
+  }
+}
