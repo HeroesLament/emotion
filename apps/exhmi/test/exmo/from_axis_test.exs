@@ -8,7 +8,7 @@ defmodule ExMo.Schema.FromAxisTest do
     id:       "axis.z",
     name:     "Z",
     type:     :linear,
-    unit:     :mm,
+    display_unit: :mm,
     limits:   {-300.0, 0.0},
     home_pos: 0.0
   }
@@ -17,9 +17,36 @@ defmodule ExMo.Schema.FromAxisTest do
     id:    "spindle",
     name:  "Spindle",
     type:  :rotary,
-    unit:  :rpm,
+    display_unit: :rpm,
     limits: {0.0, 3000.0}
   }
+
+  describe "the display hint is not the wire unit" do
+    test "a millimetre preference does not make the value millimetres" do
+      obj =
+        ExMo.Schema.FromAxis.to_object(%{
+          id: "axis.z",
+          name: "Z",
+          type: :linear,
+          display_unit: :mm
+        })
+
+      pos = Enum.find(obj.children, &(&1.name == "Position"))
+
+      # Two facts, deliberately apart. Collapsing them is how a factor of a
+      # thousand ships to a machine that then moves a thousand times too far.
+      assert pos.unit == "m"
+      assert pos.meta.display_unit == :mm
+    end
+
+    test "no preference means no hint, rather than a default one" do
+      obj = ExMo.Schema.FromAxis.to_object(%{id: "axis.z", name: "Z", type: :linear})
+      pos = Enum.find(obj.children, &(&1.name == "Position"))
+
+      assert pos.unit == "m"
+      refute Map.has_key?(pos.meta, :display_unit)
+    end
+  end
 
   describe "linear axis" do
     setup do
@@ -61,9 +88,11 @@ defmodule ExMo.Schema.FromAxisTest do
       assert tp.writable == true
     end
 
-    test "unit label appears in Position description", %{obj: obj} do
+    test "the SI unit appears in the Position description", %{obj: obj} do
       pos = Enum.find(obj.children, & &1.name == "Position")
-      assert pos.description =~ "mm"
+      # Metres, not millimetres — the description states what is on the wire.
+      assert pos.description =~ "(m)"
+      assert pos.unit == "m"
     end
   end
 
@@ -92,9 +121,12 @@ defmodule ExMo.Schema.FromAxisTest do
       assert dir.observable == true
     end
 
-    test "unit label appears in Velocity description", %{obj: obj} do
+    test "the SI unit appears in the Velocity description", %{obj: obj} do
       vel = Enum.find(obj.children, & &1.name == "Velocity")
-      assert vel.description =~ "RPM"
+      # Radians per second. RPM is a thing a human is shown, not a thing the
+      # model carries.
+      assert vel.description =~ "rad/s"
+      assert vel.unit == "rad/s"
     end
   end
 
@@ -122,7 +154,7 @@ defmodule ExMo.Schema.FromAxisTest do
     test "generates a default description when none provided" do
       obj = FromAxis.to_object(@linear_spec)
       assert obj.description =~ "Z"
-      assert obj.description =~ "mm"
+      assert obj.description =~ "metres"
     end
   end
 end

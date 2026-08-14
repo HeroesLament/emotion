@@ -7,7 +7,7 @@ defmodule ExMo.Schema.Registry do
   printer/drive fragments, etc. For now it's explicit and inspectable.
   """
 
-  alias ExMo.Schema.{Model, Object, Property, Enum, FromBehavior}
+  alias ExMo.Schema.{Model, Object, Property, Enum, FromAxis, FromBehavior}
   alias ExMo.Behaviors.K1C.RemovePreviousPrint
 
   @doc "Returns the uncompiled root model with all registered fragments."
@@ -60,6 +60,7 @@ defmodule ExMo.Schema.Registry do
       id:       "exmo",
       name:     "ExMo",
       children: [
+        axes_object(),
         behaviors_object(rpp_catalog, rpp_runtime),
         printers_object(),
         state_object()
@@ -92,6 +93,41 @@ defmodule ExMo.Schema.Registry do
       name:        "ActiveBehavior",
       description: "Live state of the currently executing behavior. Fields are nil when idle.",
       children:    runtime_props
+    }
+  end
+
+  # ── Axes ──────────────────────────────────────────────────────────────────
+
+  # The arm, in SI. Limits mirror the demo chain in EMotion.Startup; they are
+  # here rather than derived from it because the controller owns the cell model
+  # and the Studio is a consumer of it, not the other way round.
+  #
+  # `display_unit: :degrees` is a hint to whatever renders these for a human.
+  # It does not change the values, which are radians everywhere.
+  @arm_axes [
+    %{id: "axes.j1", name: "J1", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
+      display_unit: :degrees, description: "Shoulder pan"},
+    %{id: "axes.j2", name: "J2", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
+      display_unit: :degrees, description: "Shoulder lift"},
+    %{id: "axes.j3", name: "J3", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
+      display_unit: :degrees, description: "Elbow"},
+    %{id: "axes.j4", name: "J4", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
+      display_unit: :degrees, description: "Wrist 1"},
+    %{id: "axes.j5", name: "J5", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
+      display_unit: :degrees, description: "Wrist 2"},
+    %{id: "axes.j6", name: "J6", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
+      display_unit: :degrees, description: "Wrist 3"}
+  ]
+
+  @doc "The registered axis specs, for tests and for whoever wires the drives."
+  def arm_axes, do: @arm_axes
+
+  defp axes_object do
+    %Object{
+      id:          "axes",
+      name:        "Axes",
+      description: "Motion axes. Positions in radians, velocities in rad/s.",
+      children:    Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1)
     }
   end
 
