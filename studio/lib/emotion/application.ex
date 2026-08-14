@@ -12,7 +12,11 @@ defmodule EMotion.Application do
 
     children = [
       EMotion.Job,
-      EMotion.Cell.Server
+      # Opened onto a demo arm rather than an empty void: a blank 3D viewport
+      # gives a new user no way to tell "working, nothing loaded" from
+      # "broken". Goes away when there is a start page and a file format.
+      {EMotion.Cell.Server, cell: EMotion.Startup.demo_cell()},
+      {EMotion.Boot, steps: EMotion.Startup.steps()}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: EMotion.Supervisor)
