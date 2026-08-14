@@ -11,7 +11,7 @@ contract inside one of them would quietly make that one authoritative.
 | File                             | What it is                                  |
 |----------------------------------|---------------------------------------------|
 | `emotion-protocol.openrpc.json`  | The interface contract (OpenRPC 1.3.2)      |
-| `DESIGN.md`                      | Drive layer, CiA 402, and the simulator      |
+| `DESIGN.md`                      | Drive layer, CiA 402, FOC, and the force path |
 
 ## The stack
 
@@ -75,6 +75,12 @@ is not between the planner and the drives. A Studio that disconnects mid-motion
 is a non-event for the robot.
 
 ## Not a safety function
+
+Everything here — including force estimation and contact detection — is
+functional capability, not a protective measure. Power and force limiting as a
+*safety function* requires safety-rated sensing and safety-rated logic with a
+demonstrated performance level, which a momentum observer running in the BEAM
+is not and cannot become. See the safety section of `DESIGN.md`.
 
 `motion/stop` asks a working controller, over a working network, to decelerate.
 It cannot help when the controller has wedged, the link is down, or someone is
