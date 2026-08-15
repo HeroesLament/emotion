@@ -54,7 +54,10 @@ defmodule ExMo.Projection.JSONRPCTest do
     test "browse returns direct children in declaration order", %{table: table} do
       names = table |> JSONRPC.children("axes") |> Elixir.Enum.map(& &1.name)
 
-      assert names == ~w(J1 J2 J3 J4 J5 J6)
+      # The joints in order, then the point at the end of them. A pendant draws
+      # this list top to bottom, so J3 appearing above J2 would be a real bug
+      # rather than a cosmetic one.
+      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP)
     end
   end
 
@@ -64,7 +67,37 @@ defmodule ExMo.Projection.JSONRPCTest do
       # axes were absent from every projection. This is the regression test for
       # that having been fixed.
       assert Map.has_key?(table.nodes, "axes")
-      assert length(JSONRPC.children(table, "axes")) == 6
+
+      joints =
+        table
+        |> JSONRPC.children("axes")
+        |> Elixir.Enum.filter(&(&1.class == :object and &1.node_id != "axes.tcp"))
+
+      assert length(joints) == 6
+    end
+
+    test "the tool centre point is beside the joints, not inside one", %{table: table} do
+      # Under `axes` rather than under an axis: a pose is a fact about the set
+      # of joints and not about any one of them. It also has to share a subtree
+      # with them, because a Cartesian jog is one held command on this object
+      # and ExProto.Jog has to see that the hold covers every joint below it.
+      names = table |> JSONRPC.children("axes.tcp") |> Elixir.Enum.map(& &1.name)
+
+      assert names == ~w(X Y Z Rx Ry Rz)
+
+      # Derived from the joints, so only ever as trustworthy as they are — and
+      # every component says so, rather than a client having to know that a
+      # pose is computed.
+      for id <- ~w(axes.tcp.x axes.tcp.rz) do
+        node = table.nodes[id]
+        assert node.readable
+        refute node.writable
+        assert node.observable
+        assert node.meta.feedback == true
+      end
+
+      assert table.nodes["axes.tcp.x"].unit == "m"
+      assert table.nodes["axes.tcp.rx"].unit == "rad"
     end
 
     test "each axis carries the standard property set", %{table: table} do

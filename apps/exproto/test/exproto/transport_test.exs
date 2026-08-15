@@ -293,7 +293,12 @@ defmodule ExProto.TransportTest do
       {conn, ref, websocket} = initialized(port, token)
 
       {conn, websocket, browse} = request(conn, ref, websocket, "nodes/browse", %{"nodeId" => "axes"}, 2)
-      assert length(browse["result"]["children"]) == 6
+
+      # Six joints and the tool centre point they place. Named rather than
+      # counted: a count that goes up is a test that gets its number bumped
+      # without anyone looking at what arrived.
+      assert Enum.map(browse["result"]["children"], & &1["nodeId"]) ==
+               ~w(axes.j1 axes.j2 axes.j3 axes.j4 axes.j5 axes.j6 axes.tcp)
 
       {_conn, _websocket, read} =
         request(conn, ref, websocket, "nodes/read", %{"nodeIds" => ["axes.j1.position"]}, 3)

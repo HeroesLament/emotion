@@ -131,12 +131,91 @@ defmodule ExMo.Schema.Registry do
   @doc "The registered axis specs, for tests and for whoever wires the drives."
   def arm_axes, do: @arm_axes
 
+  @doc """
+  The kinematic chain the axes above form.
+
+  Public because it is the answer to "where is the tool", and that gets asked
+  from the projection, from the source that serves it, and from tests alike.
+  One description: the Studio draws this chain and the controller computes
+  forward kinematics over it.
+  """
+  def arm_chain, do: ExMove.Library.demo()
+
+  # The joints, and the point at the end of them.
+  #
+  # The id is `axes` because that is the object which contains the joints, and
+  # a tool centre point is a fact about the set of them rather than about any
+  # one. It reads a little oddly and it is deliberate: the alternative is
+  # wrapping everything in an `arm` object today, which renames every node id
+  # in the published protocol and 169 call sites, to buy a distinction that
+  # only starts to pay when there are two arms. When there are, this becomes
+  # `arm_a.axes` and the rename is worth it.
+  #
+  # It also puts the TCP inside the same subtree as the joints, which is what
+  # `ExProto.Jog` needs: a Cartesian jog is one held command on this object,
+  # and a hold on it has to cover every joint underneath.
   defp axes_object do
     %Object{
       id:          "axes",
       name:        "Axes",
-      description: "Motion axes. Positions in radians, velocities in rad/s.",
-      children:    Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1)
+      description:
+        "The arm: its joints, and the tool centre point they place. Positions " <>
+          "in radians, velocities in rad/s, the tool in metres.",
+      children:    Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1) ++ [tcp_object()]
+    }
+  end
+
+  # ── Tool centre point ─────────────────────────────────────────────────────
+
+  # Derived, not measured, and read-only for the same reason `direction` is: a
+  # pose is where the arm has ended up, not something a client sets. Commanding
+  # the tool somewhere is a Cartesian move, which is a method.
+  #
+  # Six flat doubles rather than one struct. A pendant subscribing to a pose
+  # wants to know when Z changed, and a struct-valued node changes when any
+  # field does — so every wrist rotation would wake every client watching
+  # height. Flat also means the OPC UA projection and the JSON-RPC one need no
+  # struct support to publish it.
+  #
+  # Forward kinematics is exact given the joints, so this is only ever as
+  # trustworthy as they are — which is what `feedback` says, carried up from
+  # the axes rather than asserted here. An arm of open-loop steppers reports a
+  # tool centre point computed from where it believes it is.
+  defp tcp_object do
+    feedback? = Elixir.Enum.all?(@arm_axes, &FromAxis.feedback?(FromAxis.interface(&1)))
+
+    %Object{
+      id:          "axes.tcp",
+      name:        "TCP",
+      description:
+        "Tool centre point, by forward kinematics over the joints above. " <>
+          "Position in metres, orientation in radians as fixed-axis roll, " <>
+          "pitch and yaw.",
+      meta:        %{feedback: feedback?, frame: "base"},
+      children:
+        Elixir.Enum.map(
+          [
+            {"x", "X", "m", "Tool position along base X"},
+            {"y", "Y", "m", "Tool position along base Y"},
+            {"z", "Z", "m", "Tool position along base Z"},
+            {"rx", "Rx", "rad", "Tool roll about base X"},
+            {"ry", "Ry", "rad", "Tool pitch about base Y"},
+            {"rz", "Rz", "rad", "Tool yaw about base Z"}
+          ],
+          fn {id, name, unit, description} ->
+            %Property{
+              id:          "axes.tcp.#{id}",
+              name:        name,
+              description: description,
+              type:        :double,
+              unit:        unit,
+              readable:    true,
+              writable:    false,
+              observable:  true,
+              meta:        %{feedback: feedback?}
+            }
+          end
+        )
     }
   end
 

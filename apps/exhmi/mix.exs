@@ -33,7 +33,12 @@ defmodule Exhmi.MixProject do
       # For the grant vocabulary. The model declares which grant guards each
       # property, so the names have to come from somewhere both projections
       # agree on. exauth has no dependency back on exhmi, so this stays acyclic.
-      {:exauth, in_umbrella: true}
+      {:exauth, in_umbrella: true},
+
+      # Kinematics. The model publishes a tool centre point, which is forward
+      # kinematics over the same chain the Studio draws — and the chain lives in
+      # exmove so there is one description of the arm rather than two.
+      {:exmove, in_umbrella: true}
     ]
   end
 end

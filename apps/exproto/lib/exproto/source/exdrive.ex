@@ -36,6 +36,9 @@ defmodule ExProto.Source.Exdrive do
 
   require Logger
 
+  alias ExMo.Schema.Registry
+  alias ExMove.{FK, JointState}
+
   # CiA 402 states in which the drive accepts a setpoint. Everything else
   # discards it; see Exdrive.Drive.
   @accepting [:switched_on, :operation_enabled]
@@ -55,6 +58,12 @@ defmodule ExProto.Source.Exdrive do
 
   @impl ExProto.Source
   def read_many(node_ids, _arg) do
+    {tcp_ids, axis_ids} = Enum.split_with(node_ids, &tcp?/1)
+
+    read_axes(axis_ids) ++ read_tcp(tcp_ids)
+  end
+
+  defp read_axes(node_ids) do
     node_ids
     |> Enum.group_by(&axis_of/1)
     |> Enum.flat_map(fn
@@ -68,6 +77,56 @@ defmodule ExProto.Source.Exdrive do
         end
     end)
   end
+
+  # ── Where the tool is ─────────────────────────────────────────────────────
+
+  # One forward-kinematics solve for however many components were asked for,
+  # from one observation of every joint.
+  #
+  # Not six solves, and more importantly not six *observations*: a pose
+  # assembled from joints read at six different instants is a pose the arm was
+  # never in. On a moving arm the error is small and entirely wrong — it looks
+  # like a plausible position rather than like a fault, which is the worst way
+  # for a number to be untrue.
+  defp read_tcp([]), do: []
+
+  defp read_tcp(node_ids) do
+    chain = Registry.arm_chain()
+
+    case joint_positions(chain) do
+      {:ok, positions} ->
+        frame = FK.solve(chain, %JointState{positions: positions})
+        Enum.map(node_ids, &{&1, component(&1, frame)})
+
+      {:error, reason} ->
+        Enum.map(node_ids, &{&1, {:error, reason}})
+    end
+  end
+
+  # Every joint in the chain's order, which is the order forward kinematics
+  # expects and is not necessarily the order a client asked in.
+  defp joint_positions(chain) do
+    Enum.reduce_while(chain.axis_ids, {:ok, []}, fn axis_id, {:ok, acc} ->
+      case status(Atom.to_string(axis_id)) do
+        {:ok, status} -> {:cont, {:ok, [status.actual_position | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp component("axes.tcp.x", frame), do: {:ok, frame.x}
+  defp component("axes.tcp.y", frame), do: {:ok, frame.y}
+  defp component("axes.tcp.z", frame), do: {:ok, frame.z}
+  defp component("axes.tcp.rx", frame), do: {:ok, frame.rx}
+  defp component("axes.tcp.ry", frame), do: {:ok, frame.ry}
+  defp component("axes.tcp.rz", frame), do: {:ok, frame.rz}
+  defp component(_unknown, _frame), do: {:error, :unknown_node}
+
+  defp tcp?(node_id), do: String.starts_with?(node_id, "axes.tcp.")
 
   @impl ExProto.Source
   def write(node_id, value, _arg) do
@@ -265,6 +324,9 @@ defmodule ExProto.Source.Exdrive do
   # "axes.j1.position" -> {:ok, "j1", "position"}
   defp parse(node_id) do
     case String.split(node_id, ".") do
+      # The tool is not an axis, and "tcp" in the axis position would otherwise
+      # be read as one — asking a drive called tcp for its status.
+      ["axes", "tcp", _component] -> :error
       ["axes", axis, field] -> {:ok, axis, field}
       _ -> :error
     end
