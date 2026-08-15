@@ -16,3 +16,9 @@ config :logger, level: :warning
 # The test suite owns schema and fixtures; the app must not migrate or invent
 # an administrator underneath it.
 config :exauth, auto_migrate: false, auto_provision: false
+
+# Port 0 — the OS picks an ephemeral one. The OPC UA server binds at
+# application start, so a fixed 4840 meant the whole suite refused to run
+# whenever a controller was up on the same machine. A test run should not
+# depend on what else the developer happens to have running.
+config :exhmi, port: 0

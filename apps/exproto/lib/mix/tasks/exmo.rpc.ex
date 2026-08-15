@@ -28,7 +28,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
 
   use Mix.Task
 
-  alias ExProto.Client
+  alias ExLink, as: Client
 
   @impl Mix.Task
   def run(argv) do

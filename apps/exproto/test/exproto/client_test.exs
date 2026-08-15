@@ -1,8 +1,8 @@
-defmodule ExProto.ClientTest do
+defmodule ExLinkTest do
   @moduledoc """
   The shipped client, against a real listener.
 
-  ExProto.Client is not test scaffolding — `mix exmo.rpc` uses it and Studio
+  ExLink is not test scaffolding — `mix exmo.rpc` uses it and Studio
   will. So it gets exercised the same way the server does: over TLS, against a
   listener that is actually running.
   """
@@ -11,7 +11,8 @@ defmodule ExProto.ClientTest do
 
   alias ExMo.InformationModel
   alias ExMo.Projection.JSONRPC
-  alias ExProto.{Client, Endpoint}
+  alias ExProto.Endpoint
+  alias ExLink, as: Client
   alias ExProto.Source.Static
 
   @moduletag :transport
@@ -56,6 +57,16 @@ defmodule ExProto.ClientTest do
   end
 
   defp opts(hosts), do: [known_hosts: hosts]
+
+  describe "the protocol version" do
+    test "the client speaks exactly what the server generates" do
+      # ExLink cannot read the generated document without depending on the
+      # application that generates it, so it declares the revision instead.
+      # This is the assertion that makes the declaration safe: bump one and the
+      # build fails here, rather than a workshop discovering it at handshake.
+      assert ExLink.protocol_version() == ExMo.Projection.JSONRPC.OpenRPC.protocol_version()
+    end
+  end
 
   describe "login/5" do
     test "returns a token and the account's grants", ctx do

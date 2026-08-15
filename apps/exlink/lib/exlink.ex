@@ -1,12 +1,25 @@
-defmodule ExProto.Client do
+defmodule ExLink do
   @moduledoc """
   A client for an E-Motion controller: TLS with fingerprint pinning, login,
   JSON-RPC, subscriptions.
 
   Shipped beside the server rather than written separately, because a protocol
   with one implementation on each side and no shared code is a protocol whose
-  two halves drift. The transport tests and `mix exmo.rpc` both come through
-  here, so anything that breaks a client breaks the suite.
+  two halves drift. The transport tests, `mix exmo.rpc` and E-Motion Studio all
+  come through here, so anything that breaks a client breaks the suite.
+
+  ## Its own application, depending on nothing
+
+  This lives outside `exproto` so a client can be had without a controller.
+  `exproto` needs `exhmi` for the node table and the protocol document, and
+  `exhmi` brings the OPC UA server, and `exauth` brings SQLite and Argon2 — an
+  entirely reasonable dependency graph for something that drives a robot and an
+  absurd one for something that draws it.
+
+  The only thing given up is that the protocol version is declared here rather
+  than read from the generated document. A test in `exproto` asserts the two
+  agree, so drift is a build failure rather than a handshake failure in a
+  workshop.
 
   ## Trust on first use, enforced
 
@@ -27,77 +40,26 @@ defmodule ExProto.Client do
 
   require Logger
 
+  alias ExLink.KnownHosts
+
+  # The revision this client speaks. Declared rather than read from the
+  # generated OpenRPC document, because reading it would mean depending on the
+  # application that generates it. ExProto's suite asserts they match.
+  @protocol_version "2026-08-15"
+
+  @doc "The protocol revision this client speaks."
+  @spec protocol_version() :: String.t()
+  def protocol_version, do: @protocol_version
+
   @type conn :: %{conn: term(), ref: term(), websocket: term(), id: pos_integer()}
 
   # ── Trust store ───────────────────────────────────────────────────────────
 
-  @doc """
-  Where pinned fingerprints live.
+  @doc "Where pinned fingerprints live by default."
+  defdelegate known_hosts_path(), to: KnownHosts, as: :default_path
 
-  Overridable per call via the `:known_hosts` option, so a test does not write
-  into the working tree and so an embedding application — Studio — can keep its
-  trust store somewhere it owns rather than wherever it happened to be started
-  from.
-  """
-  def known_hosts_path(opts \\ []) do
-    Keyword.get(opts, :known_hosts, Path.join([File.cwd!(), ".emotion", "known_hosts"]))
-  end
-
-  @doc """
-  Checks a live connection's certificate against what was pinned before.
-
-  Returns `{:ok, :pinned}` when it matches, `{:ok, :learned}` on first sight,
-  or `{:error, {:fingerprint_changed, expected, got}}`.
-  """
-  def verify_pin(socket, host, port, opts \\ []) do
-    with {:ok, der} <- :ssl.peercert(socket) do
-      got = fingerprint(der)
-      key = "#{host}:#{port}"
-
-      case Map.get(load_known_hosts(opts), key) do
-        nil ->
-          if Keyword.get(opts, :learn, true), do: remember(key, got, opts)
-          {:ok, :learned, got}
-
-        ^got ->
-          {:ok, :pinned, got}
-
-        expected ->
-          {:error, {:fingerprint_changed, expected, got}}
-      end
-    end
-  end
-
-  @doc "Colon-separated uppercase SHA-256, the form `openssl x509 -fingerprint` prints."
-  def fingerprint(der) do
-    :crypto.hash(:sha256, der)
-    |> Base.encode16()
-    |> String.to_charlist()
-    |> Enum.chunk_every(2)
-    |> Enum.map_join(":", &to_string/1)
-  end
-
-  defp load_known_hosts(opts) do
-    case File.read(known_hosts_path(opts)) do
-      {:ok, contents} ->
-        contents
-        |> String.split("\n", trim: true)
-        |> Enum.reject(&String.starts_with?(&1, "#"))
-        |> Map.new(fn line ->
-          [host, print] = String.split(line, " ", parts: 2)
-          {host, String.trim(print)}
-        end)
-
-      {:error, _} ->
-        %{}
-    end
-  end
-
-  defp remember(key, print, opts) do
-    path = known_hosts_path(opts)
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, "#{key} #{print}\n", [:append])
-  end
+  @doc "Colon-separated uppercase SHA-256, as openssl prints it."
+  defdelegate fingerprint(der), to: KnownHosts
 
   # ── HTTPS ─────────────────────────────────────────────────────────────────
 
@@ -144,7 +106,7 @@ defmodule ExProto.Client do
     if Keyword.get(opts, :insecure, false) do
       {:ok, :skipped}
     else
-      case verify_pin(Mint.HTTP.get_socket(conn), host, port, opts) do
+      case KnownHosts.verify(Mint.HTTP.get_socket(conn), host, port, opts) do
         {:ok, :learned, print} ->
           Logger.warning("""
           First connection to #{host}:#{port}. Pinning its certificate:
@@ -170,7 +132,7 @@ defmodule ExProto.Client do
 
            Either its certificate was deliberately rotated, or this is not the
            machine you pinned. Refusing to continue. If the rotation was
-           intended, remove the line from #{known_hosts_path(opts)}.
+           intended, run ExLink.KnownHosts.forget/2 for this host.
            """}
 
         {:error, reason} ->
@@ -233,8 +195,8 @@ defmodule ExProto.Client do
       session = %{conn: conn, ref: ref, websocket: websocket, id: 1}
 
       case request(session, "initialize", %{
-             "protocolVersion" => ExMo.Projection.JSONRPC.OpenRPC.protocol_version(),
-             "clientInfo" => %{"name" => "exmo-client", "version" => "0.1.0"}
+             "protocolVersion" => @protocol_version,
+             "clientInfo" => Keyword.get(opts, :client_info, %{"name" => "exlink", "version" => "0.1.0"})
            }) do
         {:ok, session, %{"result" => result}} -> {:ok, session, result}
         {:ok, _session, %{"error" => error}} -> {:error, error}
@@ -266,6 +228,58 @@ defmodule ExProto.Client do
         end
     after
       10_000 -> {:error, :upgrade_timeout}
+    end
+  end
+
+  @doc """
+  Sends a request without waiting, returning the id to match a reply against.
+
+  What a GenServer uses: it cannot block in a `receive` without stalling every
+  other message it is responsible for.
+  """
+  @spec send_request(map(), String.t(), map()) :: {:ok, map(), pos_integer()} | {:error, term()}
+  def send_request(session, method, params) do
+    id = session.id
+
+    payload =
+      %{"jsonrpc" => "2.0", "method" => method, "params" => params, "id" => id}
+      |> :json.encode()
+      |> IO.iodata_to_binary()
+
+    with {:ok, session} <- send_text(session, payload) do
+      {:ok, %{session | id: id + 1}, id}
+    end
+  end
+
+  @doc """
+  Decodes one already-received message into frames.
+
+  The counterpart to `send_request/3`: hand it whatever arrived in
+  `handle_info/2` and it returns any complete JSON-RPC frames, or `:unknown` if
+  the message was not ours — which is the answer a GenServer needs, because it
+  has its own messages and must be able to tell them apart.
+  """
+  @spec stream(map(), term()) :: {:ok, map(), [map()]} | :unknown | {:error, term()}
+  def stream(session, message) do
+    case Mint.WebSocket.stream(session.conn, message) do
+      {:ok, conn, responses} ->
+        data =
+          responses
+          |> Enum.flat_map(fn
+            {:data, ref, d} when ref == session.ref -> [d]
+            _ -> []
+          end)
+          |> IO.iodata_to_binary()
+
+        {:ok, websocket, decoded} = Mint.WebSocket.decode(session.websocket, data)
+        frames = for {:text, text} <- decoded, do: :json.decode(text)
+        {:ok, %{session | conn: conn, websocket: websocket}, frames}
+
+      {:error, _conn, reason, _responses} ->
+        {:error, reason}
+
+      :unknown ->
+        :unknown
     end
   end
 
@@ -318,34 +332,38 @@ defmodule ExProto.Client do
 
   Returns `{:ok, session, [map]}` or `{:error, :timeout}`.
   """
-  def recv(session, timeout \\ 5_000) do
+  def recv(session, timeout \\ 5_000), do: do_recv(session, timeout, [])
+
+  defp do_recv(session, timeout, deferred) do
     receive do
       message ->
-        case Mint.WebSocket.stream(session.conn, message) do
-          {:ok, conn, responses} ->
-            data =
-              responses
-              |> Enum.flat_map(fn
-                {:data, ref, d} when ref == session.ref -> [d]
-                _ -> []
-              end)
-              |> IO.iodata_to_binary()
+        case stream(session, message) do
+          {:ok, session, []} ->
+            do_recv(session, timeout, deferred)
 
-            {:ok, websocket, decoded} = Mint.WebSocket.decode(session.websocket, data)
+          {:ok, session, frames} ->
+            requeue(deferred)
+            {:ok, session, frames}
 
-            frames =
-              for {:text, text} <- decoded do
-                :json.decode(text)
-              end
+          :unknown ->
+            # Not ours. Hold it and put it back afterwards rather than dropping
+            # it — this blocking path runs inside whatever process called it,
+            # and silently eating that process's mail is not ours to do.
+            do_recv(session, timeout, [message | deferred])
 
-            session = %{session | conn: conn, websocket: websocket}
-            if frames == [], do: recv(session, timeout), else: {:ok, session, frames}
-
-          {:error, _conn, reason, _responses} ->
+          {:error, reason} ->
+            requeue(deferred)
             {:error, reason}
         end
     after
-      timeout -> {:error, :timeout}
+      timeout ->
+        requeue(deferred)
+        {:error, :timeout}
     end
   end
+
+  # Oldest first, so deferred messages keep their order relative to each other.
+  # They do move behind anything that arrived while we were waiting; a caller
+  # that cannot tolerate that should use stream/2 and own its own loop.
+  defp requeue(deferred), do: Enum.each(Enum.reverse(deferred), &send(self(), &1))
 end
