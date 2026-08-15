@@ -277,7 +277,7 @@ defmodule EMotion.Shell do
       # A fixed-height strip. Without a minimum size a notebook takes its best
       # size from its busiest page, so the Controllers list would decide how
       # tall the bar is for every tab.
-      {:ensure_widget, :ribbon, :notebook, :root, size: {0, 170}},
+      {:ensure_widget, :ribbon, :notebook, :root, size: {0, 200}},
 
       {:ensure_panel, :tab_view, :ribbon, label: "View"},
       {:ensure_widget, :workbench_label, :static_text, :tab_view, label: "Workbench:"},
@@ -368,14 +368,11 @@ defmodule EMotion.Shell do
              {:spacer, 12},
              {:vbox, [],
               [
-                :ctl_add,
-                :ctl_edit,
-                :ctl_remove,
+                {:hbox, [],
+                 [:ctl_add, {:spacer, 6}, :ctl_edit, {:spacer, 6}, :ctl_remove]},
                 {:spacer, 8},
-                :ctl_props,
-                {:spacer, 8},
-                :ctl_connect,
-                :ctl_disconnect
+                {:hbox, [],
+                 [:ctl_props, {:spacer, 6}, :ctl_connect, {:spacer, 6}, :ctl_disconnect]}
               ]}
            ]},
           {:spacer, 6},
