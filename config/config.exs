@@ -23,3 +23,20 @@ config :exmove, :joint_limits, %{
   "joint5" => %{max_vel: 2.09,  max_acc: 8.0},   # wrist pitch     ~120°/s
   "joint6" => %{max_vel: 3.14,  max_acc: 12.0},  # tool rotation   ~180°/s
 }
+
+# ── Credentials ─────────────────────────────────────────────────────────────
+
+config :exauth, ecto_repos: [ExAuth.Repo]
+
+# Argon2id parameters are pinned rather than left to the library default, so a
+# dependency bump cannot silently change how long a login takes on a Pi or how
+# much memory it costs. m_cost 15 is 32 MiB per verification; the default 16 is
+# 64 MiB, which is more than a small Nerves target should spend on a login.
+# t_cost 3 at 32 MiB lands around 100 ms on a Pi 5 — invisible once per session,
+# and expensive enough to matter to anyone with the database.
+config :argon2_elixir,
+  t_cost: 3,
+  m_cost: 15,
+  parallelism: 2
+
+import_config "#{config_env()}.exs"

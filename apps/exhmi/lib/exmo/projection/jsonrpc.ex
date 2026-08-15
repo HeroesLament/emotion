@@ -51,13 +51,16 @@ defmodule ExMo.Projection.JSONRPC do
   def project(%Model{root: root, types: types}) do
     entries = walk(root, nil, types)
 
-    case duplicate_ids(entries) do
-      [] ->
+    case {duplicate_ids(entries), ungranted_writes(entries)} do
+      {[], []} ->
         nodes = Map.new(entries, fn entry -> {entry.node_id, entry} end)
         {:ok, %{root: node_id(root), nodes: nodes}}
 
-      dups ->
+      {[_ | _] = dups, _} ->
         {:error, {:duplicate_node_ids, dups}}
+
+      {[], [_ | _] = ungranted} ->
+        {:error, {:writable_without_grant, ungranted}}
     end
   rescue
     e -> {:error, e}
@@ -73,6 +76,22 @@ defmodule ExMo.Projection.JSONRPC do
     |> Elixir.Enum.frequencies_by(& &1.node_id)
     |> Elixir.Enum.filter(fn {_id, count} -> count > 1 end)
     |> Elixir.Enum.map(&elem(&1, 0))
+    |> Elixir.Enum.sort()
+  end
+
+  # A writable property that names no write grant is a modelling error, not a
+  # property anyone may write. Refusing to project it means the mistake surfaces
+  # when the model is built — in a test, at boot — rather than as an
+  # unauthorised write that nobody notices because it succeeded.
+  #
+  # The alternative, defaulting to some grant, is worse in both directions: a
+  # permissive default is an open door, and a restrictive one silently makes a
+  # property unwritable and sends somebody hunting through the transport for a
+  # bug that is in the model.
+  defp ungranted_writes(entries) do
+    entries
+    |> Elixir.Enum.filter(&(&1.class == :property and &1.writable and is_nil(&1.write_grant)))
+    |> Elixir.Enum.map(& &1.node_id)
     |> Elixir.Enum.sort()
   end
 
@@ -147,6 +166,10 @@ defmodule ExMo.Projection.JSONRPC do
         readable: prop.readable,
         writable: prop.writable,
         observable: prop.observable,
+        # The authorisation the enforcement point checks. See
+        # ExMo.Schema.Property on why these live on the model and not here.
+        read_grant: prop.read_grant,
+        write_grant: prop.write_grant,
         default: prop.default,
         meta: meta
       }

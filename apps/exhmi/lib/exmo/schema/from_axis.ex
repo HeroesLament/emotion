@@ -133,6 +133,9 @@ defmodule ExMo.Schema.FromAxis do
         readable: true,
         writable: true,
         observable: false,
+        # Writing this moves the arm. :write_setpoint, not :write_configuration
+        # — an observer must not reach it and an operator must.
+        write_grant: :write_setpoint,
         meta: hint
       },
       %Property{
@@ -181,7 +184,8 @@ defmodule ExMo.Schema.FromAxis do
         type: :string,
         readable: true,
         writable: true,
-        observable: true
+        observable: true,
+        write_grant: :write_setpoint
       }
     ]
   end

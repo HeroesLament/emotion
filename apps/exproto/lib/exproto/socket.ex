@@ -41,7 +41,8 @@ defmodule ExProto.Socket do
 
     {:ok,
      %{
-       session: Session.new(table: opts.table, source: opts.source),
+       session:
+         Session.new(table: opts.table, source: opts.source, principal: opts.principal),
        publisher: publisher,
        known: MapSet.new()
      }}

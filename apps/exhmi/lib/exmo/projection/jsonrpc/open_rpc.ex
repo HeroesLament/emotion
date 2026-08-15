@@ -305,7 +305,12 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
         error_ref("NotInitialized"),
         error_ref("UnknownNode"),
         error_ref("NotObservable"),
-        error_ref("TooManySubscriptions")
+        error_ref("TooManySubscriptions"),
+        # Top-level here, unlike read and write. A subscription is one ongoing
+        # thing: there is no partial subscription to half a node list, so a
+        # caller lacking the grant for any node in the request is refused the
+        # whole call rather than given a subscription that silently omits it.
+        error_ref("Forbidden")
       ]
     }
   end
@@ -559,6 +564,15 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
       "WriteRejected" => %{
         "code" => -32010,
         "message" => "The controller refused the write in its current state."
+      },
+      # -32009 is skipped deliberately. It briefly belonged to
+      # UnknownSubscription, which was deleted once unsubscribe became
+      # idempotent and nothing could return it. Reusing a retired code is how a
+      # client that pinned an old document renders the wrong message.
+      "Forbidden" => %{
+        "code" => -32011,
+        "message" => "The authenticated principal does not hold the required grant.",
+        "data" => %{"requiredGrant" => "the grant that was missing"}
       }
     }
   end
@@ -576,7 +590,17 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
       "description" =>
         "Codes that can appear in a NodeError inside a batch result, rather " <>
           "than as a top-level JSON-RPC error.",
-      "codes" => ["UnknownNode", "NotReadable", "NotWritable", "InvalidValue", "WriteRejected"]
+      "codes" => [
+        "UnknownNode",
+        "NotReadable",
+        "NotWritable",
+        "InvalidValue",
+        "WriteRejected",
+        # Per-node, because authorisation is per-node: a batch may read fifteen
+        # properties the caller is entitled to and one it is not, and the answer
+        # to that is fifteen values and one refusal.
+        "Forbidden"
+      ]
     }
   end
 

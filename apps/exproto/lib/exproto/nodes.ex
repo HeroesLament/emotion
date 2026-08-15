@@ -34,6 +34,7 @@ defmodule ExProto.Nodes do
   @invalid_value -32_007
   @too_many_subscriptions -32_008
   @write_rejected -32_010
+  @forbidden -32_011
 
   @invalid_params -32_602
 
@@ -52,7 +53,8 @@ defmodule ExProto.Nodes do
       not_observable: @not_observable,
       invalid_value: @invalid_value,
       too_many_subscriptions: @too_many_subscriptions,
-      write_rejected: @write_rejected
+      write_rejected: @write_rejected,
+      forbidden: @forbidden
     }
   end
 
@@ -222,10 +224,21 @@ defmodule ExProto.Nodes do
   defp split_readable(session, node_ids) do
     Enum.reduce(node_ids, {[], %{}}, fn id, {ok, bad} ->
       case Session.fetch_node(session, id) do
-        {:ok, %{class: :property, readable: true}} -> {[id | ok], bad}
-        {:ok, %{class: :property}} -> {ok, Map.put(bad, id, :not_readable)}
-        {:ok, _other} -> {ok, Map.put(bad, id, :not_readable)}
-        :error -> {ok, Map.put(bad, id, :unknown_node)}
+        {:ok, %{class: :property, readable: true} = node} ->
+          if Session.can?(session, node.read_grant) do
+            {[id | ok], bad}
+          else
+            {ok, Map.put(bad, id, {:forbidden, node.read_grant})}
+          end
+
+        {:ok, %{class: :property}} ->
+          {ok, Map.put(bad, id, :not_readable)}
+
+        {:ok, _other} ->
+          {ok, Map.put(bad, id, :not_readable)}
+
+        :error ->
+          {ok, Map.put(bad, id, :unknown_node)}
       end
     end)
     |> then(fn {ok, bad} -> {Enum.reverse(ok), bad} end)
@@ -294,9 +307,21 @@ defmodule ExProto.Nodes do
 
   defp fetch_writable(session, id) do
     case Session.fetch_node(session, id) do
-      {:ok, %{class: :property, writable: true} = node} -> {:ok, node}
-      {:ok, _node} -> {:error, :not_writable}
-      :error -> {:error, :unknown_node}
+      {:ok, %{class: :property, writable: true} = node} ->
+        # Authorisation is checked after writability and before validation, so
+        # a caller without the grant learns nothing about whether the value it
+        # tried to send would have been accepted.
+        if Session.can?(session, node.write_grant) do
+          {:ok, node}
+        else
+          {:error, {:forbidden, node.write_grant}}
+        end
+
+      {:ok, _node} ->
+        {:error, :not_writable}
+
+      :error ->
+        {:error, :unknown_node}
     end
   end
 
@@ -337,6 +362,7 @@ defmodule ExProto.Nodes do
     with :ok <- require_initialized(session),
          {:ok, node_ids} <- fetch_list(params, "nodeIds"),
          :ok <- all_observable(session, node_ids),
+         :ok <- all_readable_grant(session, node_ids),
          {:ok, rate} <- fetch_rate(params) do
       case Session.subscribe(session, node_ids, rate) do
         {:ok, id, session} ->
@@ -350,6 +376,26 @@ defmodule ExProto.Nodes do
     else
       error -> {error, session}
     end
+  end
+
+  defp all_readable_grant(session, node_ids) do
+    # A subscription is a read that repeats, so it needs the read grant. Without
+    # this, an observer denied a one-off read could subscribe to the same node
+    # and get it thirty times a second.
+    Enum.reduce_while(node_ids, :ok, fn id, :ok ->
+      case Session.fetch_node(session, id) do
+        {:ok, %{class: :property} = node} ->
+          if Session.can?(session, node.read_grant) do
+            {:cont, :ok}
+          else
+            {:halt, {:error, @forbidden, "Requires the #{node.read_grant} grant",
+                     %{"nodeId" => id, "requiredGrant" => Atom.to_string(node.read_grant)}}}
+          end
+
+        _other ->
+          {:cont, :ok}
+      end
+    end)
   end
 
   defp all_observable(session, node_ids) do
@@ -429,6 +475,19 @@ defmodule ExProto.Nodes do
   defp error_body(:not_readable), do: %{"code" => @not_readable, "message" => "Node is not readable"}
   defp error_body(:not_writable), do: %{"code" => @not_writable, "message" => "Node is not writable"}
   defp error_body(:rejected), do: %{"code" => @write_rejected, "message" => "The controller refused the write in its current state"}
+
+  # Names the grant that was missing. Telling a caller which permission it
+  # lacks is the difference between an operator who knows to ask for the
+  # maintainer role and one who files a bug about the arm being broken. It
+  # leaks nothing: the grant a node requires is already published in the
+  # OpenRPC document and readable by anyone who can browse.
+  defp error_body({:forbidden, grant}) do
+    %{
+      "code" => @forbidden,
+      "message" => "Requires the #{grant} grant",
+      "data" => %{"requiredGrant" => Atom.to_string(grant)}
+    }
+  end
 
   defp error_body(other) do
     # A source returning a reason outside ExProto.Source.reason/0 is a bug in

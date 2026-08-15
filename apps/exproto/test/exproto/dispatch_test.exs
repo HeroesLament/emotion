@@ -35,11 +35,25 @@ defmodule ExProto.DispatchTest do
         reject: ["axes.j2.target_position"]
       )
 
-    session = Session.new(table: table, source: {Static, source})
+    session =
+      Session.new(table: table, source: {Static, source}, principal: principal(:maintainer))
+
     {:ok, session: session, source: source, table: table}
   end
 
   # ── helpers ───────────────────────────────────────────────────────────────
+
+  # No database. ExAuth.Principal is a plain struct built from an account's id,
+  # username and role, so the pure protocol tests stay pure — a test that has
+  # to migrate a schema to check an authorisation rule will not be run often
+  # enough to matter.
+  defp principal(role) do
+    ExAuth.Principal.new(%{id: 1, username: "test-#{role}", role: role})
+  end
+
+  defp session_as(role, %{table: table, source: source}) do
+    Session.new(table: table, source: {Static, source}, principal: principal(role))
+  end
 
   defp call(session, method, params \\ %{}, id \\ 1) do
     request = %{"jsonrpc" => "2.0", "method" => method, "params" => params, "id" => id}
@@ -503,6 +517,143 @@ defmodule ExProto.DispatchTest do
         assert MapSet.member?(used, code),
                "#{name} (#{code}) is declared but the implementation never returns it"
       end
+    end
+  end
+
+  # ── authorisation ─────────────────────────────────────────────────────────
+
+  describe "grants on read" do
+    test "an observer may read state", context do
+      session = :observer |> session_as(context) |> ready()
+      {:reply, response, _} = call(session, "nodes/read", %{"nodeIds" => ["axes.j1.position"]})
+
+      assert [%{"value" => 0.5}] = response["result"]["values"]
+    end
+
+    test "a principal holding nothing is refused, per node", context do
+      # :nobody is not a role, so it resolves to an empty grant set. This is the
+      # fail-closed path: an unrecognised role must grant nothing rather than
+      # falling through to permissive defaults.
+      session = :nobody |> session_as(context) |> ready()
+      {:reply, response, _} = call(session, "nodes/read", %{"nodeIds" => ["axes.j1.position"]})
+
+      assert [%{"error" => error}] = response["result"]["values"]
+      assert error["code"] == Nodes.error_codes().forbidden
+      assert error["data"]["requiredGrant"] == "read_state"
+    end
+
+    test "a refusal names the missing grant so an operator knows what to ask for", context do
+      session = :nobody |> session_as(context) |> ready()
+      {:reply, response, _} = call(session, "nodes/read", %{"nodeIds" => ["axes.j1.position"]})
+
+      assert [%{"error" => %{"message" => message}}] = response["result"]["values"]
+      assert message =~ "read_state"
+    end
+  end
+
+  describe "grants on write" do
+    test "an operator may command a setpoint", context do
+      session = :operator |> session_as(context) |> ready()
+
+      {:reply, response, _} =
+        call(session, "nodes/write", %{
+          "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => 1.0}]
+        })
+
+      assert [%{"ok" => true, "value" => 1.0}] = response["result"]["results"]
+    end
+
+    test "an observer may not", context do
+      session = :observer |> session_as(context) |> ready()
+
+      {:reply, response, _} =
+        call(session, "nodes/write", %{
+          "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => 1.0}]
+        })
+
+      assert [%{"ok" => false, "error" => error}] = response["result"]["results"]
+      assert error["code"] == Nodes.error_codes().forbidden
+      assert error["data"]["requiredGrant"] == "write_setpoint"
+    end
+
+    test "a safety officer may not command motion either", context do
+      # The role exists to configure safety, and the whole reason it is off the
+      # observer/operator ladder is that it must not be able to move the arm.
+      session = :safety_officer |> session_as(context) |> ready()
+
+      {:reply, response, _} =
+        call(session, "nodes/write", %{
+          "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => 1.0}]
+        })
+
+      assert [%{"ok" => false, "error" => %{"code" => code}}] = response["result"]["results"]
+      assert code == Nodes.error_codes().forbidden
+    end
+
+    test "a refused write does not reach the source", context do
+      session = :observer |> session_as(context) |> ready()
+
+      call(session, "nodes/write", %{
+        "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => 2.5}]
+      })
+
+      # The value the source still holds is the one it started with. An
+      # authorisation check that runs after the effect is not a check.
+      reader = :maintainer |> session_as(context) |> ready()
+
+      {:reply, response, _} =
+        call(reader, "nodes/read", %{"nodeIds" => ["axes.j1.target_position"]})
+
+      # +0.0, not 0.0: OTP 27+ warns that a bare 0.0 pattern matches only +0.0.
+      assert [%{"value" => +0.0}] = response["result"]["values"]
+    end
+
+    test "authorisation is checked before validation", context do
+      # A caller without the grant must not learn whether its value would have
+      # been accepted — the refusal is the same for a valid and an invalid one.
+      session = :observer |> session_as(context) |> ready()
+
+      {:reply, response, _} =
+        call(session, "nodes/write", %{
+          "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => "not a number"}]
+        })
+
+      assert [%{"ok" => false, "error" => %{"code" => code}}] = response["result"]["results"]
+      assert code == Nodes.error_codes().forbidden
+    end
+  end
+
+  describe "grants on subscribe" do
+    test "an observer may subscribe to what it may read", context do
+      session = :observer |> session_as(context) |> ready()
+
+      {:reply, response, _} =
+        call(session, "nodes/subscribe", %{"nodeIds" => ["axes.j1.position"]})
+
+      assert response["result"]["subscriptionId"]
+    end
+
+    test "a principal holding nothing may not subscribe", context do
+      # Without this, a read an observer is denied could be obtained thirty
+      # times a second by subscribing to it instead.
+      session = :nobody |> session_as(context) |> ready()
+
+      {:reply, response, _} =
+        call(session, "nodes/subscribe", %{"nodeIds" => ["axes.j1.position"]})
+
+      assert response["error"]["code"] == Nodes.error_codes().forbidden
+      assert response["error"]["data"]["requiredGrant"] == "read_state"
+    end
+  end
+
+  describe "a session with no principal" do
+    test "is refused everything rather than permitted everything", %{table: table, source: source} do
+      session =
+        Session.new(table: table, source: {Static, source}, principal: nil) |> ready()
+
+      {:reply, response, _} = call(session, "nodes/read", %{"nodeIds" => ["axes.j1.position"]})
+      assert [%{"error" => %{"code" => code}}] = response["result"]["values"]
+      assert code == Nodes.error_codes().forbidden
     end
   end
 end

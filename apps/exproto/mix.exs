@@ -31,6 +31,10 @@ defmodule Exproto.MixProject do
       # The node table and the protocol document both come from the model.
       {:exhmi, in_umbrella: true},
 
+      # The credential authority. Authentication happens at the upgrade in
+      # ExProto.Router; grants are checked against the model in ExProto.Nodes.
+      {:exauth, in_umbrella: true},
+
       # Transport. Bandit rather than Cowboy: pure Elixir, smaller on a Nerves
       # image, and the WebSock specification is the supported way to speak
       # WebSocket without dragging Phoenix in.

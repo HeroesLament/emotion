@@ -223,4 +223,120 @@ defmodule ExMo.Projection.JSONRPCTest do
       Elixir.Enum.reduce(node.children, seen, &walk_from(table, &1, &2))
     end
   end
+
+  describe "grants" do
+    setup do
+      {:ok, model} = ExMo.InformationModel.compiled_model()
+      {:ok, table} = ExMo.Projection.JSONRPC.project(model)
+      %{table: table}
+    end
+
+    test "every property carries the grant needed to read it", %{table: table} do
+      for node <- ExMo.Projection.JSONRPC.filter(table, :property) do
+        assert node.read_grant, "#{node.node_id} declares no read grant"
+        assert ExAuth.Grant.known?(node.read_grant),
+               "#{node.node_id} declares unknown read grant #{inspect(node.read_grant)}"
+      end
+    end
+
+    test "every writable property names the grant needed to write it", %{table: table} do
+      # Elixir.Enum, not Enum: this module aliases ExMo.Schema.Enum.
+      writable =
+        table
+        |> ExMo.Projection.JSONRPC.filter(:property)
+        |> Elixir.Enum.filter(& &1.writable)
+
+      # If this list is ever empty the test has stopped testing anything.
+      assert writable != []
+
+      for node <- writable do
+        assert node.write_grant, "#{node.node_id} is writable but names no write grant"
+        assert ExAuth.Grant.known?(node.write_grant),
+               "#{node.node_id} declares unknown write grant #{inspect(node.write_grant)}"
+      end
+    end
+
+    test "read-only properties do not name a write grant", %{table: table} do
+      for node <- ExMo.Projection.JSONRPC.filter(table, :property), not node.writable do
+        assert is_nil(node.write_grant),
+               "#{node.node_id} is read-only but names write grant #{inspect(node.write_grant)}"
+      end
+    end
+
+    test "commanding a joint requires a motion grant, not a configuration grant", %{table: table} do
+      target = table.nodes["axes.j1.target_position"]
+
+      assert target.writable
+      assert target.write_grant == :write_setpoint
+      assert target.write_grant in ExAuth.Grant.motion_grants()
+    end
+
+    test "an observer can read every property in the model", %{table: table} do
+      observer = ExAuth.Role.grants(:observer)
+
+      for node <- ExMo.Projection.JSONRPC.filter(table, :property) do
+        assert node.read_grant in observer,
+               "#{node.node_id} needs #{inspect(node.read_grant)}, which an observer lacks"
+      end
+    end
+
+    test "an observer can write nothing in the model", %{table: table} do
+      observer = ExAuth.Role.grants(:observer)
+
+      for node <- ExMo.Projection.JSONRPC.filter(table, :property), node.writable do
+        refute node.write_grant in observer,
+               "an observer could write #{node.node_id}"
+      end
+    end
+  end
+
+  describe "failing closed" do
+    test "a writable property with no write grant is refused, not defaulted" do
+      # The whole point of the design: forgetting the annotation must break the
+      # build, because the alternatives are an open door or a silently
+      # unwritable property.
+      model = %ExMo.Schema.Model{
+        id: "test",
+        root: %ExMo.Schema.Object{
+          id: "root",
+          name: "Root",
+          children: [
+            %ExMo.Schema.Property{
+              id: "root.oops",
+              name: "Oops",
+              type: :double,
+              writable: true
+            }
+          ]
+        },
+        types: %{}
+      }
+
+      assert {:error, {:writable_without_grant, ["root.oops"]}} =
+               ExMo.Projection.JSONRPC.project(model)
+    end
+
+    test "the same property is fine once the grant is declared" do
+      model = %ExMo.Schema.Model{
+        id: "test",
+        root: %ExMo.Schema.Object{
+          id: "root",
+          name: "Root",
+          children: [
+            %ExMo.Schema.Property{
+              id: "root.fine",
+              name: "Fine",
+              type: :double,
+              writable: true,
+              write_grant: :write_configuration
+            }
+          ]
+        },
+        types: %{}
+      }
+
+      assert {:ok, table} = ExMo.Projection.JSONRPC.project(model)
+      assert table.nodes["root.fine"].write_grant == :write_configuration
+    end
+  end
 end

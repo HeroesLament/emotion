@@ -30,6 +30,7 @@ defmodule ExProto.Session do
   defstruct [
     :table,
     :source,
+    :principal,
     initialized?: false,
     protocol_version: nil,
     client_info: nil,
@@ -41,6 +42,7 @@ defmodule ExProto.Session do
   @type t :: %__MODULE__{
           table: map(),
           source: {module(), term()},
+          principal: ExAuth.Principal.t() | nil,
           initialized?: boolean(),
           protocol_version: String.t() | nil,
           client_info: map() | nil,
@@ -53,15 +55,34 @@ defmodule ExProto.Session do
   A fresh session for one connection.
 
   `:table` is the projected node table; `:source` is `{module, arg}` for
-  reading and writing values.
+  reading and writing values; `:principal` is who authenticated.
+
+  The principal is required rather than optional. A session with no principal
+  would be a session that can be constructed by forgetting an argument, and the
+  thing it would then permit is everything — so the absence of a credential has
+  to be spelled out as `ExAuth.Principal` never being nil in normal operation.
+  Tests that genuinely want an unauthenticated session pass one explicitly.
   """
   @spec new(keyword()) :: t()
   def new(opts) do
     %__MODULE__{
       table: Keyword.fetch!(opts, :table),
-      source: Keyword.fetch!(opts, :source)
+      source: Keyword.fetch!(opts, :source),
+      principal: Keyword.fetch!(opts, :principal)
     }
   end
+
+  @doc """
+  Whether this session's principal holds `grant`.
+
+  The single authorisation question the protocol layer asks. Sessions with no
+  principal answer `false` to everything rather than raising: a bug that
+  produces an unauthenticated session should fail closed and be visible as a
+  refusal, not crash a connection in a way that looks like a network fault.
+  """
+  @spec can?(t(), atom()) :: boolean()
+  def can?(%__MODULE__{principal: nil}, _grant), do: false
+  def can?(%__MODULE__{principal: principal}, grant), do: ExAuth.can?(principal, grant)
 
   @doc "The protocol revision this build speaks."
   @spec protocol_version() :: String.t()

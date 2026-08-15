@@ -28,7 +28,12 @@ defmodule Exhmi.MixProject do
 
   defp deps do
     [
-      {:ex_opcua, in_umbrella: true}
+      {:ex_opcua, in_umbrella: true},
+
+      # For the grant vocabulary. The model declares which grant guards each
+      # property, so the names have to come from somewhere both projections
+      # agree on. exauth has no dependency back on exhmi, so this stays acyclic.
+      {:exauth, in_umbrella: true}
     ]
   end
 end
