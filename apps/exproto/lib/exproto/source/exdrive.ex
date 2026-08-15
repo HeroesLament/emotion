@@ -98,11 +98,18 @@ defmodule ExProto.Source.Exdrive do
   defp field_value("target_position", status), do: {:ok, status.target_position}
   defp field_value("velocity", status), do: {:ok, status.actual_velocity}
 
-  # The model types this as a string and the drive holds an atom. Converting
-  # here rather than letting an atom reach the encoder: JSON has no atoms, and
-  # a projection that relies on the encoder guessing is one refactor away from
-  # emitting something a client cannot parse.
-  defp field_value("drive_state", status), do: {:ok, Atom.to_string(status.state)}
+  # The neutral state, which every interface reports in the same vocabulary.
+  # This binding drives CiA 402 hardware, so the mapping is from the PDS state
+  # machine — a step/dir or PWM source maps from whatever it has instead, and
+  # a client reading `state` does not have to know which it is talking to.
+  defp field_value("state", status), do: {:ok, neutral_state(status)}
+
+  # The raw PDS state, published beside the neutral one rather than instead of
+  # it, so nothing is lost for a servo. Converting the atom here: JSON has no
+  # atoms, and a projection relying on the encoder to guess is one refactor
+  # away from emitting something a client cannot parse.
+  defp field_value("pds_state", status), do: {:ok, Atom.to_string(status.state)}
+  defp field_value("status_word", status), do: {:ok, status.status_word}
 
   # The model says uint16, "0 when healthy". The drive says nil when healthy.
   # The model wins — it is the published contract.
@@ -119,6 +126,33 @@ defmodule ExProto.Source.Exdrive do
   end
 
   defp field_value(_unknown, _status), do: {:error, :unknown_node}
+
+  # CiA 402 PDS → the vocabulary in ExMo.Schema.FromAxis.states/0.
+  #
+  # `switched_on` is energised but not accepting motion, which is exactly what
+  # `ready` means; `operation_enabled` splits into `enabled` and `moving` on
+  # whether the axis is actually turning, because an operator watching a live
+  # machine needs to see the difference and the PDS state machine does not
+  # distinguish them.
+  defp neutral_state(%{state: state} = status) do
+    case state do
+      :fault -> "fault"
+      :fault_reaction_active -> "fault"
+      :quick_stop_active -> "stopping"
+      :switched_on -> "ready"
+      :ready_to_switch_on -> "ready"
+      :operation_enabled -> operating_state(status)
+      _not_energised -> "disabled"
+    end
+  end
+
+  # Homing is a *mode* in CiA 402, not a PDS state — a homing drive sits in
+  # operation_enabled like any other — so it is read from the mode and takes
+  # precedence over moving, which it also is.
+  defp operating_state(%{mode: :homing, homing_complete: false}), do: "homing"
+  defp operating_state(status), do: if(moving?(status), do: "moving", else: "enabled")
+
+  defp moving?(%{actual_velocity: velocity}), do: abs(velocity) > 1.0e-6
 
   # ── Talking to the drive ──────────────────────────────────────────────────
 

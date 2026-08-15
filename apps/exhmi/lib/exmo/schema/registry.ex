@@ -30,6 +30,15 @@ defmodule ExMo.Schema.Registry do
 
   defp base_types do
     %{
+      "type.axis_state" => %Enum{
+        id:          "type.axis_state",
+        name:        "AxisState",
+        description:
+          "Axis state, in one vocabulary across every interface E-Motion drives " <>
+            "— CiA 402 servo, step/dir stepper, PWM servo. `ready` is energised " <>
+            "but not accepting motion; `enabled` is live.",
+        values: ExMo.Schema.FromAxis.states()
+      },
       "type.behavior_phase" => %Enum{
         id:          "type.behavior_phase",
         name:        "BehaviorPhase",

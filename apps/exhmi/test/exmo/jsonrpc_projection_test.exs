@@ -73,7 +73,10 @@ defmodule ExMo.Projection.JSONRPCTest do
       assert "Position" in names
       assert "TargetPosition" in names
       assert "Velocity" in names
-      assert "DriveState" in names
+      # State is the neutral node every interface has; PdsState is the CiA 402
+      # detail beside it, and the arm axes are CiA 402.
+      assert "State" in names
+      assert "PdsState" in names
       assert "FaultCode" in names
       # rotary
       assert "Direction" in names
