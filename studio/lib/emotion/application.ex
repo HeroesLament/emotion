@@ -31,6 +31,15 @@ defmodule EMotion.Application do
       # leaves something to ask the status of; nothing here dials anything.
       EMotion.Link,
 
+      # The thing that keeps asserting a jog while a button is held. Started
+      # here rather than by the pendant panel, because it must outlive the
+      # panel: a pane that is closed, or a scene that crashes and is restarted,
+      # must not be able to leave an axis moving. It cannot — the assertions
+      # stop with whatever was making them and the controller notices on its
+      # own deadline — but the process that sends the explicit stop should
+      # still be somewhere the interface cannot take down with it.
+      EMotion.Jog,
+
       {EMotion.Boot, steps: EMotion.Startup.steps()}
     ]
 

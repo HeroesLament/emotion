@@ -27,7 +27,7 @@ defmodule EMotion.Shell do
   use Cedar.Scene
 
   alias Cedar.Camera
-  alias EMotion.{Boot, Cell, Controllers, Link, Navigator, Scene, Workbench}
+  alias EMotion.{Boot, Cell, Controllers, Jog, Link, Navigator, Pendant, Scene, Workbench}
   alias EMotion.Workbench.Registry
 
   require Logger
@@ -57,6 +57,7 @@ defmodule EMotion.Shell do
       workbench: workbench,
       workbench_state: init_workbench(workbench, cell),
       controllers: Controllers.new(),
+      pendant: Pendant.new(cell),
       status: "Starting…"
     }
   end
@@ -85,6 +86,15 @@ defmodule EMotion.Shell do
     # app that holds a splash to look substantial is just slower.
     {:noreply, if(progress.complete?, do: %{model | phase: :ready}, else: model)}
   end
+
+  # What the holder says is happening, which is not the same as what was asked
+  # for: a refusal arrives here and lands in the panel's status line.
+  def handle_info({:jog, %{status: {:refused, reason}}}, model) do
+    {:noreply,
+     %{model | pendant: %{Pendant.release(model.pendant) | status: refusal(reason)}}}
+  end
+
+  def handle_info({:jog, _state}, model), do: {:noreply, model}
 
   def handle_info({:link, {:disconnected, reason}}, model) do
     {:noreply, %{model | controllers: Controllers.disconnected(model.controllers, reason)}}
@@ -162,6 +172,18 @@ defmodule EMotion.Shell do
 
   def handle_event({:ui_event, :ctl_disconnect, :click}, model),
     do: controller_action(model, :disconnect)
+
+  # Jogging. The scene records what is held; EMotion.Jog does the asserting,
+  # because a hold that lasted only as long as the interface happened to be
+  # re-rendering would be a machine controlled by a redraw loop.
+  def handle_event({:ui_event, {:jog_neg, axis}, :press}, model), do: press(model, axis, -1)
+  def handle_event({:ui_event, {:jog_pos, axis}, :press}, model), do: press(model, axis, 1)
+
+  def handle_event({:ui_event, {:jog_neg, _axis}, :release}, model), do: release(model)
+  def handle_event({:ui_event, {:jog_pos, _axis}, :release}, model), do: release(model)
+
+  def handle_event({:ui_event, :pendant_slower, :click}, model), do: speed(model, :slower)
+  def handle_event({:ui_event, :pendant_faster, :click}, model), do: speed(model, :faster)
 
   def handle_event({:ui_event, :view_iso, :click}, model), do: look(model, :iso)
   def handle_event({:ui_event, :view_top, :click}, model), do: look(model, :top)
@@ -304,8 +326,16 @@ defmodule EMotion.Shell do
         ]}}
     ] ++ controllers_tab(model) ++ [
 
+      # -- docking --------------------------------------------------------
+      # The viewport is the centre pane, which is the one pane that cannot
+      # float — so the GL context is never reparented into a new top-level
+      # window, which is how a GL context is lost. Every suite in this genre
+      # puts the document in the middle anyway.
+      {:ensure_dock_host, :dock, :root, []},
+      {:ensure_dock_pane, :viewport_pane, :dock, dock: :centre},
+
       # -- viewport -------------------------------------------------------
-      {:ensure_visual, :viewport, :viewport, :root,
+      {:ensure_visual, :viewport, :viewport, :viewport_pane,
        size: {1040, 720},
        fps: 30,
        notify: self(),
@@ -317,6 +347,7 @@ defmodule EMotion.Shell do
       {:ensure_widget, :status, :static_text, :root, label: model.status},
       {:set, :status, label: model.status}
     ] ++
+      pendant_pane(model) ++
       workbench_view(model) ++
       [
         {:layout, :root,
@@ -324,13 +355,117 @@ defmodule EMotion.Shell do
           [
             {:ribbon, proportion: 0, flag: :expand},
             {:spacer, 6},
-            {:viewport, proportion: 1, flag: :expand},
+            {:dock, proportion: 1, flag: :expand},
             {:spacer, 6},
             :status
           ]}},
         {:refresh, :main}
       ]
   end
+
+  # ==========================================================================
+  # Pendant
+  # ==========================================================================
+
+  # A pane rather than a ribbon tab. A pendant is the thing an operator keeps
+  # in view for as long as they are moving the machine, which a tab that hides
+  # the moment they look at anything else cannot be — and it is the panel most
+  # likely to want dragging onto a second screen next to the cell.
+  defp pendant_pane(model) do
+    pendant = model.pendant
+    live? = Pendant.enabled?(pendant, connected?(model))
+
+    header =
+      [
+        {:ensure_dock_pane, :pendant, :dock,
+         caption: "Pendant", dock: :right, size: {300, 700}},
+        {:ensure_widget, :pendant_status, :static_text, :pendant, label: pendant.status},
+        {:set, :pendant_status, label: pendant.status},
+        {:ensure_widget, :pendant_speed_label, :static_text, :pendant,
+         label: "Speed  #{Pendant.speed_label(pendant)}"},
+        {:set, :pendant_speed_label, label: "Speed  #{Pendant.speed_label(pendant)}"},
+        {:ensure_widget, :pendant_slower, :button, :pendant, label: "−"},
+        {:ensure_widget, :pendant_faster, :button, :pendant, label: "+"}
+      ]
+
+    rows = Enum.flat_map(pendant.axes, &axis_row(&1, pendant, live?))
+
+    header ++
+      rows ++
+      [
+        {:layout, :pendant,
+         {:vbox, [padding: 8],
+          [
+            :pendant_status,
+            {:spacer, 6},
+            {:hbox, [], [:pendant_speed_label, {:spacer, 8}, :pendant_slower, :pendant_faster]},
+            {:spacer, 10}
+          ] ++ Enum.map(pendant.axes, &axis_layout/1)}}
+      ]
+  end
+
+  # Minus on the left of plus, always, on every axis. An operator reaching for
+  # J5 without looking is the case this is for, and a row that reorders itself
+  # for any reason at all breaks it.
+  defp axis_row(axis, pendant, live?) do
+    [
+      {:ensure_widget, {:axis_name, axis}, :static_text, :pendant, label: String.upcase(axis)},
+      {:ensure_widget, {:axis_value, axis}, :static_text, :pendant,
+       label: Pendant.readout(pendant, axis)},
+      {:set, {:axis_value, axis}, label: Pendant.readout(pendant, axis)},
+      # `hold: true`: these report going down and coming up rather than being
+      # clicked, because the axis moves for exactly as long as the button is
+      # held. See Cedar.Renderer.Intents.Widgets.Button.
+      {:ensure_widget, {:jog_neg, axis}, :button, :pendant, label: "−", hold: true},
+      {:ensure_widget, {:jog_pos, axis}, :button, :pendant, label: "+", hold: true},
+      {:set, {:jog_neg, axis}, enabled: live?},
+      {:set, {:jog_pos, axis}, enabled: live?}
+    ]
+  end
+
+  defp axis_layout(axis) do
+    {:hbox, [],
+     [
+       {:axis_name, axis},
+       {:spacer, 8},
+       {:axis_value, axis},
+       {:spacer, 12},
+       {:jog_neg, axis},
+       {:spacer, 4},
+       {:jog_pos, axis}
+     ]}
+  end
+
+  defp connected?(model), do: model.controllers.connected_to != nil
+
+  defp press(model, axis, direction) do
+    Jog.press(axis, direction)
+
+    %{
+      model
+      | pendant: %{
+          Pendant.hold(model.pendant, axis, direction)
+          | status: "Jogging #{String.upcase(axis)} #{arrow(direction)}"
+        }
+    }
+  end
+
+  defp release(model) do
+    Jog.release()
+    %{model | pendant: %{Pendant.release(model.pendant) | status: "Ready"}}
+  end
+
+  defp speed(model, change) do
+    pendant = apply(Pendant, change, [model.pendant])
+    Jog.set_speed(pendant.speed)
+    %{model | pendant: pendant}
+  end
+
+  defp arrow(-1), do: "−"
+  defp arrow(1), do: "+"
+
+  defp refusal(%{"message" => message}), do: message
+  defp refusal(reason), do: inspect(reason)
 
   # ==========================================================================
 

@@ -94,13 +94,39 @@ defmodule EMotion.Link do
   def status(opts \\ []), do: GenServer.call(server(opts), :status)
 
   @doc """
-  Commands one joint, in radians.
+  Commands one joint to a position, in radians.
 
-  Returns the value the controller applied.
+  A setpoint, not a jog: it says where the axis should end up and the axis is
+  under no obligation to have arrived when this returns. See `hold/3` for
+  motion that lasts only as long as somebody is asking for it.
   """
-  @spec jog(atom() | String.t(), float(), keyword()) :: {:ok, float()} | {:error, term()}
-  def jog(axis, radians, opts \\ []) do
-    GenServer.call(server(opts), {:jog, to_string(axis), radians * 1.0}, 10_000)
+  @spec move_to(atom() | String.t(), float(), keyword()) :: {:ok, float()} | {:error, term()}
+  def move_to(axis, radians, opts \\ []) do
+    GenServer.call(server(opts), {:move_to, to_string(axis), radians * 1.0}, 10_000)
+  end
+
+  @doc """
+  Asserts a jog, and returns the deadline it must be re-asserted within.
+
+  This is one assertion, not a jog: the controller commands zero as soon as
+  they stop arriving. Something has to keep calling it while the operator holds
+  the button, and that something is `EMotion.Jog` — calling this directly moves
+  the axis for a third of a second and then stops, which is a correct and
+  useless thing to do.
+
+  The returned deadline is the one the controller *granted*, which is not
+  necessarily the one implied by the caller's rate. Re-assert inside it.
+  """
+  @spec hold(atom() | String.t(), float(), keyword()) ::
+          {:ok, pos_integer()} | {:error, term()}
+  def hold(axis, radians_per_second, opts \\ []) do
+    GenServer.call(server(opts), {:hold, to_string(axis), radians_per_second * 1.0}, 10_000)
+  end
+
+  @doc "Reads node values, as a map of node id to value."
+  @spec read([String.t()], keyword()) :: {:ok, map()} | {:error, term()}
+  def read(node_ids, opts \\ []) do
+    GenServer.call(server(opts), {:read, node_ids}, 10_000)
   end
 
   @doc "Receive `{:link, event}` messages: `:connected`, `{:disconnected, reason}`, `{:error, term}`."
@@ -160,11 +186,56 @@ defmodule EMotion.Link do
     {:reply, :ok, %{state | subscribers: MapSet.put(state.subscribers, pid)}}
   end
 
-  def handle_call({:jog, _axis, _value}, _from, %{session: nil} = state) do
+  def handle_call({op, _axis, _value}, _from, %{session: nil} = state)
+      when op in [:move_to, :hold] do
     {:reply, {:error, :not_connected}, state}
   end
 
-  def handle_call({:jog, axis, value}, _from, state) do
+  def handle_call({:read, _ids}, _from, %{session: nil} = state) do
+    {:reply, {:error, :not_connected}, state}
+  end
+
+  # An assertion, and the reply is the granted deadline rather than a position:
+  # there is nothing to report about where the axis is, only about how long the
+  # controller will keep moving it without hearing from us again.
+  def handle_call({:hold, axis, velocity}, _from, state) do
+    params = %{
+      "nodeId" => "axes.#{axis}.jog",
+      "arguments" => %{"velocity" => velocity}
+    }
+
+    case ExLink.request(state.session, "nodes/call", params) do
+      {:ok, session, %{"result" => %{"deadlineMs" => deadline}}} ->
+        {:reply, {:ok, deadline}, %{state | session: session}}
+
+      {:ok, session, %{"error" => error}} ->
+        {:reply, {:error, error}, %{state | session: session}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, close(state, reason)}
+    end
+  end
+
+  def handle_call({:read, node_ids}, _from, state) do
+    case ExLink.request(state.session, "nodes/read", %{"nodeIds" => node_ids}) do
+      {:ok, session, %{"result" => %{"values" => values}}} ->
+        read =
+          Map.new(values, fn
+            %{"nodeId" => id, "value" => value} -> {id, value}
+            %{"nodeId" => id} -> {id, nil}
+          end)
+
+        {:reply, {:ok, read}, %{state | session: session}}
+
+      {:ok, session, %{"error" => error}} ->
+        {:reply, {:error, error}, %{state | session: session}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, close(state, reason)}
+    end
+  end
+
+  def handle_call({:move_to, axis, value}, _from, state) do
     node_id = "axes.#{axis}.target_position"
 
     case ExLink.request(state.session, "nodes/write", %{
