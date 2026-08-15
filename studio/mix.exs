@@ -31,6 +31,13 @@ defmodule EMotion.MixProject do
   defp deps do
     [
       {:exmove, path: "../apps/exmove"},
+
+      # The controller link. exlink deliberately depends on nothing but a
+      # WebSocket, which is why the studio can take it: depending on exproto
+      # would drag in the OPC UA server, SQLite and Argon2 — a desktop
+      # application shipping a database in order to draw an arm.
+      {:exlink, path: "../apps/exlink"},
+
       {:cedar, path: "../../cedar"}
     ]
   end
