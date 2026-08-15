@@ -58,6 +58,10 @@ defmodule ExMo.Schema.FromAxis do
     * `:step_dir` — Velocity
     * `:pwm`      — nothing further
 
+  Commands follow the same rule: every interface gets Enable, Disable, Stop and
+  Jog; only `:cia402` gets ResetFault, and only an interface that can find a
+  home gets Home.
+
   Rotary axes additionally get Direction; linear axes additionally get AtHome,
   and only where the interface can actually know it.
 
@@ -85,7 +89,7 @@ defmodule ExMo.Schema.FromAxis do
       object = ExMo.Schema.FromAxis.to_object(spec)
   """
 
-  alias ExMo.Schema.{Method, Object, Property}
+  alias ExMo.Schema.{Argument, Method, Object, Property}
 
   @type axis_type :: :linear | :rotary
 
@@ -356,7 +360,64 @@ defmodule ExMo.Schema.FromAxis do
         :enable_drives)
     ]
 
-    common ++ fault_methods(prefix, interface) ++ homing_methods(prefix, interface)
+    common ++
+      [jog_method(prefix)] ++
+      fault_methods(prefix, interface) ++ homing_methods(prefix, interface)
+  end
+
+  # Jog is on every interface because every interface can be told to move at a
+  # rate — a servo in profile velocity, a stepper by its step frequency, a PWM
+  # servo by walking its commanded position. What differs is only how well each
+  # can tell you what happened afterwards, and that is already said by Velocity
+  # being present or absent.
+  #
+  # It is the one method here that is *held* rather than invoked, which is what
+  # `watchdog: true` says. An operator jogging a joint is holding a button, and
+  # a protocol that models that as an ordinary command has built a machine that
+  # keeps moving when the button is released by a dropped connection rather
+  # than by a hand. See `ExMo.Schema.Method` for the contract and `ExProto.Jog`
+  # for what enforces it.
+  defp jog_method(prefix) do
+    bounds = Method.watchdog_deadline_ms()
+
+    %Method{
+      id: "#{prefix}.jog",
+      name: "Jog",
+      description:
+        "Move at a commanded rate for as long as the client keeps saying so. " <>
+          "Re-send this while the operator holds the control; 10 Hz is a " <>
+          "sensible cadence. The controller commands zero velocity as soon as " <>
+          "assertions stop arriving, so releasing the control, closing the " <>
+          "window and pulling the network cable all stop the axis without " <>
+          "anyone having to send a stop. One session holds an axis at a time, " <>
+          "and the acceptance carries the deadline that was granted rather " <>
+          "than the one requested. A functional stop, not a protective one: " <>
+          "it runs on the controller it is guarding, and the emergency stop " <>
+          "is a hardware circuit.",
+      async: true,
+      call_grant: :jog,
+      meta: %{watchdog: true},
+      input_args: [
+        %Argument{
+          name: "velocity",
+          type: :double,
+          required: true,
+          description:
+            "Signed rate, in the axis's SI unit per second. Zero is the neutral " <>
+              "assertion — the axis stops and the hold is kept."
+        },
+        %Argument{
+          name: "deadlineMs",
+          type: :uint16,
+          required: false,
+          default: bounds.default,
+          description:
+            "How long this assertion stands. Clamped to " <>
+              "#{bounds.min}..#{bounds.max} ms; read the granted value from the " <>
+              "acceptance rather than assuming this one was taken."
+        }
+      ]
+    }
   end
 
   # Only where faults can be reported in the first place.

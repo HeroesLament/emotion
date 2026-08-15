@@ -26,7 +26,7 @@ defmodule ExProto.Endpoint do
 
   require Logger
 
-  alias ExProto.{Router, TLS}
+  alias ExProto.{Jog, Router, TLS}
 
   @default_port 4001
 
@@ -40,6 +40,8 @@ defmodule ExProto.Endpoint do
     * `:port` — defaults to 4001
     * `:scheme` — `:https` (default) or `:http`
     * `:tls` — passed to `ExProto.TLS.material/1`
+    * `:jog` — name for this endpoint's held-command watchdog; defaults to one
+      derived from the port
   """
   def child_spec(opts) do
     %{
@@ -52,20 +54,36 @@ defmodule ExProto.Endpoint do
   def start_link(opts) do
     scheme = Keyword.get(opts, :scheme, :https)
     port = Keyword.get(opts, :port, @default_port)
+    jog = Keyword.get(opts, :jog, jog_name(port))
 
-    with {:ok, plug_opts} <- build(opts, scheme) do
-      Bandit.start_link(
-        plug: {Router, plug_opts.plug_opts},
-        scheme: scheme,
-        port: port,
-        thousand_island_options: plug_opts.transport
-      )
+    with {:ok, built} <- build(Keyword.put(opts, :jog, jog), scheme) do
+      children = [
+        # First, and therefore last to stop. A connection that arrives before
+        # the watchdog exists would be refused rather than jogged unguarded —
+        # correct, but the reason to order it this way is the other end:
+        # :rest_for_one means the listener goes down before the watchdog, so
+        # nothing can be holding an axis by the time it runs terminate/2 and
+        # zeroes whatever is left.
+        {Jog, name: jog},
+        {Bandit,
+         plug: {Router, built.plug_opts},
+         scheme: scheme,
+         port: port,
+         thousand_island_options: built.transport}
+      ]
+
+      Supervisor.start_link(children, strategy: :rest_for_one)
       |> tap(fn
-        {:ok, _pid} -> announce(scheme, port, plug_opts.fingerprint)
+        {:ok, _pid} -> announce(scheme, port, built.fingerprint)
         _ -> :ok
       end)
     end
   end
+
+  # Per endpoint, not global. The test suite runs several controllers in one VM
+  # and they must not share holds; the port is what already distinguishes them.
+  # An endpoint on an ephemeral port needs `:jog` passed explicitly.
+  defp jog_name(port), do: Module.concat(Jog, "P#{port}")
 
   defp build(opts, :http) do
     Logger.warning("""
@@ -95,6 +113,7 @@ defmodule ExProto.Endpoint do
       table: Keyword.fetch!(opts, :table),
       source: Keyword.fetch!(opts, :source),
       fingerprint: fingerprint,
+      jog: Keyword.get(opts, :jog, Jog),
       idle_timeout: Keyword.get(opts, :idle_timeout, 60_000),
       keepalive_ms: Keyword.get(opts, :keepalive_ms)
     }

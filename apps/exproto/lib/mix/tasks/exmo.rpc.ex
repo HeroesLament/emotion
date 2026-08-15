@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       mix exmo.rpc read <nodeId> [nodeId...]
       mix exmo.rpc write <nodeId> <value>
       mix exmo.rpc call <nodeId>
+      mix exmo.rpc jog <nodeId> <velocity> [--for 3]
       mix exmo.rpc watch <nodeId> [nodeId...] [--rate 5] [--for 10]
 
   Options: `--host` (localhost), `--port` (4001), `--user`, `--insecure`.
@@ -18,6 +19,14 @@ defmodule Mix.Tasks.Exmo.Rpc do
 
   The controller's certificate is pinned on first connection and checked on
   every one after. A changed fingerprint stops the command.
+
+  ## Jogging from a terminal
+
+  `jog` is the one command that is *held* rather than sent. It asserts at 10 Hz
+  for `--for` seconds and then simply stops, which is what a pendant does when
+  the operator lets go — and, more to the point, what a pendant does when it
+  crashes. What follows the last assertion is the controller's doing, not this
+  task's: it prints the axis settling to prove nothing here sent a stop.
 
   ## Runs alongside a live controller
 
@@ -54,6 +63,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       ["read" | ids] when ids != [] -> with_session(host, port, conn_opts, &read(&1, &2, ids))
       ["write", node, value] -> with_session(host, port, conn_opts, &write(&1, &2, node, value))
       ["call", node] -> with_session(host, port, conn_opts, &invoke(&1, &2, node))
+      ["jog", node, velocity] -> with_session(host, port, conn_opts, &jog(&1, &2, node, velocity, opts))
       ["watch" | ids] when ids != [] -> with_session(host, port, conn_opts, &watch(&1, &2, ids, opts))
       _ -> Mix.shell().info(@moduledoc)
     end
@@ -235,6 +245,79 @@ defmodule Mix.Tasks.Exmo.Rpc do
         end
     end
   end
+
+  # ── jog ───────────────────────────────────────────────────────────────────
+
+  defp jog(session, _result, node_id, raw, opts) do
+    velocity = raw |> coerce() |> as_float()
+    seconds = Keyword.get(opts, :for, 3)
+    until = System.monotonic_time(:millisecond) + seconds * 1000
+
+    Mix.shell().info("\n  holding #{node_id} at #{velocity} for #{seconds}s, asserting at 10 Hz")
+
+    case hold(session, node_id, velocity, until, nil) do
+      {:ok, session, granted} ->
+        Mix.shell().info("""
+
+          let go. Nothing below is sent by this task — the last assertion was
+          #{granted}ms of authority and the controller is on its own now.
+        """)
+
+        settle(session, parent(node_id), 6)
+
+      {:error, message} ->
+        Mix.shell().error("  #{message}")
+    end
+  end
+
+  defp hold(session, node_id, velocity, until, granted) do
+    if System.monotonic_time(:millisecond) >= until do
+      {:ok, session, granted}
+    else
+      params = %{"nodeId" => node_id, "arguments" => %{"velocity" => velocity}}
+
+      case Client.request(session, "nodes/call", params) do
+        {:ok, session, %{"result" => result}} ->
+          Process.sleep(100)
+          hold(session, node_id, velocity, until, result["deadlineMs"])
+
+        {:ok, _session, %{"error" => error}} ->
+          {:error, "#{error["message"]} (#{error["code"]})"}
+      end
+    end
+  end
+
+  # Reads the axis every 150ms after the assertions stop. A jog that had to be
+  # stopped by the client would show a velocity that never changes.
+  defp settle(_session, _axis, 0), do: Mix.shell().info("")
+
+  defp settle(session, axis, remaining) do
+    ids = ["#{axis}.velocity", "#{axis}.state"]
+
+    case Client.request(session, "nodes/read", %{"nodeIds" => ids}) do
+      {:ok, session, %{"result" => result}} ->
+        line =
+          Enum.map_join(result["values"], "   ", fn v ->
+            "#{v["nodeId"]}=#{inspect(v["value"] || v["error"]["message"])}"
+          end)
+
+        Mix.shell().info("  #{line}")
+        Process.sleep(150)
+        settle(session, axis, remaining - 1)
+
+      {:ok, _session, %{"error" => error}} ->
+        Mix.shell().error("  #{error["message"]}")
+    end
+  end
+
+  defp parent(node_id) do
+    node_id |> String.split(".") |> Enum.drop(-1) |> Enum.join(".")
+  end
+
+  # The model says double, and a controller typed double rejects an integer for
+  # the same reason a uint16 rejects 3.0.
+  defp as_float(value) when is_integer(value), do: value * 1.0
+  defp as_float(value), do: value
 
   # A CLI argument is a string; the node's schema is not. Integers stay
   # integers because a node typed uint16 rejects 3.0.

@@ -38,6 +38,7 @@ defmodule ExProto.Router do
             table: conn.assigns.opts.table,
             source: conn.assigns.opts.source,
             principal: principal,
+            jog: Map.get(conn.assigns.opts, :jog, ExProto.Jog),
             keepalive_ms: Map.get(conn.assigns.opts, :keepalive_ms)
           },
           # The socket pings well inside this; see ExProto.Socket. Configurable

@@ -40,6 +40,11 @@ defmodule ExProto.Source.Exdrive do
   # discards it; see Exdrive.Drive.
   @accepting [:switched_on, :operation_enabled]
 
+  # Radians or metres per second, whichever the axis is. One number for both
+  # because the simulated arm is rotary throughout; a machine with a linear
+  # axis needs this per axis and read from the model, not from here.
+  @max_jog_velocity 0.5
+
   @impl ExProto.Source
   def read(node_id, arg) do
     case read_many([node_id], arg) do
@@ -88,9 +93,9 @@ defmodule ExProto.Source.Exdrive do
   # ── Commands ──────────────────────────────────────────────────────────────
 
   @impl ExProto.Source
-  def call(node_id, _args, _arg) do
+  def call(node_id, args, _arg) do
     case parse(node_id) do
-      {:ok, axis, command} -> command(axis, command)
+      {:ok, axis, command} -> command(axis, command, args)
       :error -> {:error, :unknown_node}
     end
   end
@@ -100,8 +105,8 @@ defmodule ExProto.Source.Exdrive do
   # axis's `state`. Checking the drive is reachable first means an axis whose
   # process is gone reports :rejected rather than silently swallowing the
   # command — a cast to a dead name would look like success.
-  defp command(axis, name) do
-    with {:ok, _status} <- status(axis) do
+  defp command(axis, name, args) do
+    with {:ok, status} <- status(axis) do
       case name do
         "enable" -> Exdrive.Drive.enable(axis) && :ok
         "disable" -> Exdrive.Drive.control_word(axis, 0x0000) && :ok
@@ -111,9 +116,46 @@ defmodule ExProto.Source.Exdrive do
         "stop" -> Exdrive.Drive.quick_stop(axis) && :ok
         "reset_fault" -> Exdrive.Drive.fault_reset(axis) && :ok
         "home" -> home(axis)
+        "jog" -> jog(axis, status, args)
         _ -> {:error, :not_callable}
       end
     end
+  end
+
+  # A jog is only ever a velocity setpoint here. The holding, the deadline and
+  # the stop when assertions lapse are `ExProto.Jog`'s, above this — a source
+  # that started its own timers would be a second watchdog with a different
+  # idea of when the operator let go.
+  #
+  # `operation_enabled` strictly, not `@accepting`. A drive in `switched_on`
+  # POSTPONES a velocity cast rather than discarding it, so an axis jogged
+  # before it was enabled would sit on the setpoint and take off the instant
+  # somebody energised it — with no assertion outstanding by then, and nothing
+  # the watchdog could recognise as a hold to stop.
+  defp jog(axis, %{state: :operation_enabled} = status, args) do
+    with {:ok, velocity} <- as_float(args["velocity"]),
+         {:ok, _mode} <- ensure_velocity_mode(axis, status) do
+      Exdrive.Drive.set_target_velocity(axis, clamp_jog(velocity))
+      :ok
+    end
+  end
+
+  defp jog(_axis, _status, _args), do: {:error, :rejected}
+
+  # Only when it has to change. This runs at the client's assertion rate, and
+  # set_mode is a call — a synchronous round trip into the drive's state
+  # machine ten times a second to tell it what it already knows.
+  defp ensure_velocity_mode(_axis, %{mode: :profile_velocity}), do: {:ok, :profile_velocity}
+  defp ensure_velocity_mode(axis, _status), do: set_mode(axis, :profile_velocity)
+
+  # A manual-mode speed limit, and a functional one: the constraint that
+  # actually matters is the 250 mm/s ISO 10218 puts on the tool centre point,
+  # which needs the whole kinematic chain to evaluate and belongs in a
+  # safety-rated function rather than in a source module. This keeps a slipped
+  # decimal point in a pendant from becoming a full-speed joint move; it is not
+  # what stands between anyone and the arm.
+  defp clamp_jog(velocity) do
+    velocity |> max(-@max_jog_velocity) |> min(@max_jog_velocity)
   end
 
   defp home(axis) do

@@ -74,6 +74,37 @@ defmodule ExProto.DispatchTest do
     session
   end
 
+  # A session bound to a particular watchdog. Held commands are the only thing
+  # that needs one, so the ordinary sessions above leave it at its default.
+  defp held_session(role, %{table: table, source: source, jog: jog}) do
+    Session.new(
+      table: table,
+      source: {Static, source},
+      principal: ExAuth.Principal.new(%{id: 1, username: "test-#{role}", role: role}),
+      jog: jog
+    )
+    |> ready()
+  end
+
+  defp jog(session, velocity, extra \\ %{}, node_id \\ "axes.j1.jog") do
+    arguments = Map.merge(%{"velocity" => velocity}, extra)
+    call(session, "nodes/call", %{"nodeId" => node_id, "arguments" => arguments}, 2)
+  end
+
+  defp wait_until(fun, remaining \\ 200) do
+    cond do
+      fun.() ->
+        :ok
+
+      remaining <= 0 ->
+        flunk("condition never became true")
+
+      true ->
+        Process.sleep(5)
+        wait_until(fun, remaining - 5)
+    end
+  end
+
   defp result({:reply, %{"result" => result}, _session}), do: result
   defp error({:reply, %{"error" => error}, _session}), do: error
 
@@ -747,6 +778,173 @@ defmodule ExProto.DispatchTest do
       {:reply, response, _} = call(session, "nodes/call", %{}, 2)
 
       assert response["error"]["code"] == -32_602
+    end
+  end
+
+  # ── held commands ─────────────────────────────────────────────────────────
+
+  describe "nodes/call, held" do
+    setup do
+      # A watchdog per test, named per test. These run async, and a shared one
+      # would let a hold taken in one test refuse a jog in another — a failure
+      # that would appear and disappear with the scheduler.
+      name = :"jog_#{System.unique_integer([:positive])}"
+      pid = start_supervised!({ExProto.Jog, name: name})
+
+      {:ok, jog: name, jog_pid: pid}
+    end
+
+    test "an operator may jog, and is told the deadline it must beat", context do
+      session = held_session(:operator, context)
+
+      {:reply, response, _} = jog(session, 0.1)
+
+      assert response["result"]["accepted"] == true
+      assert response["result"]["deadlineMs"] == ExMo.Schema.Method.watchdog_deadline_ms().default
+    end
+
+    test "an observer may not", context do
+      session = held_session(:observer, context)
+
+      {:reply, response, _} = jog(session, 0.1)
+
+      assert response["error"]["code"] == Nodes.error_codes().forbidden
+      assert response["error"]["data"]["requiredGrant"] == "jog"
+    end
+
+    test "the deadline is clamped, and the granted one is what comes back", context do
+      session = held_session(:operator, context)
+      bounds = ExMo.Schema.Method.watchdog_deadline_ms()
+
+      {:reply, slow, _} = jog(session, 0.1, %{"deadlineMs" => 10_000})
+      assert slow["result"]["deadlineMs"] == bounds.max
+
+      {:reply, fast, _} = jog(session, 0.1, %{"deadlineMs" => 1})
+      assert fast["result"]["deadlineMs"] == bounds.min
+    end
+
+    test "a jog with no velocity is invalid params rather than a hold", context do
+      session = held_session(:operator, context)
+
+      {:reply, response, _} =
+        call(session, "nodes/call", %{"nodeId" => "axes.j1.jog", "arguments" => %{}}, 2)
+
+      assert response["error"]["code"] == -32_602
+      assert ExProto.Jog.holder("axes.j1", context.jog) == :none
+    end
+
+    test "the setpoint reaches the source", %{source: source} = context do
+      session = held_session(:operator, context)
+
+      {:reply, _, _} = jog(session, 0.25)
+
+      assert [{"axes.j1.jog", %{"velocity" => 0.25}}] = Static.calls(source)
+    end
+
+    test "one session at a time holds an axis", context do
+      first = held_session(:operator, context)
+      {:reply, accepted, _} = jog(first, 0.1)
+      assert accepted["result"]["accepted"] == true
+
+      # A second session, which here means a second process: the hold is on the
+      # connection, and two requests from one process are the same holder.
+      second = held_session(:operator, context)
+
+      response =
+        Task.async(fn ->
+          {:reply, response, _} = jog(second, 0.1)
+          response
+        end)
+        |> Task.await()
+
+      assert response["error"]["code"] == Nodes.error_codes().node_held
+    end
+
+    test "when the assertions stop, the axis is commanded to zero",
+         %{source: source} = context do
+      session = held_session(:operator, context)
+
+      {:reply, _, _} = jog(session, 0.4, %{"deadlineMs" => 50})
+      assert [{"axes.j1.jog", %{"velocity" => 0.4}}] = Static.calls(source)
+
+      # Nothing further is sent. This is the whole point: a client that stops
+      # asserting — because it crashed, or because the link dropped — must not
+      # leave the axis moving.
+      Process.sleep(150)
+
+      assert [_asserted, {"axes.j1.jog", %{"velocity" => +0.0}}] = Static.calls(source)
+      assert ExProto.Jog.holder("axes.j1", context.jog) == :none
+    end
+
+    test "when the holder dies, the axis is commanded to zero",
+         %{source: source, jog_pid: watchdog} = context do
+      session = held_session(:operator, context)
+
+      holder =
+        spawn(fn ->
+          {:reply, _, _} = jog(session, 0.4, %{"deadlineMs" => 500})
+          receive do: (:never -> :ok)
+        end)
+
+      ref = Process.monitor(holder)
+      wait_until(fn -> ExProto.Jog.holder("axes.j1", context.jog) == {:ok, holder} end)
+
+      Process.exit(holder, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^holder, :killed}
+
+      # Long before the 500ms deadline: losing the client is itself the signal,
+      # and waiting out the timer would be 500ms of motion nobody is watching.
+      :sys.get_state(watchdog)
+      assert [_asserted, {"axes.j1.jog", %{"velocity" => +0.0}}] = Static.calls(source)
+    end
+
+    test "an ordinary command supersedes a hold", %{source: source} = context do
+      first = held_session(:operator, context)
+      {:reply, _, _} = jog(first, 0.4, %{"deadlineMs" => 500})
+
+      # A stop from someone who can see the machine outranks a joystick held by
+      # someone who may not be in the room.
+      second = held_session(:operator, context)
+
+      Task.async(fn ->
+        {:reply, response, _} = call(second, "nodes/call", %{"nodeId" => "axes.j1.stop"}, 2)
+        assert response["result"]["accepted"] == true
+
+        # And the axis is free again, rather than held by a session that has
+        # stopped asserting.
+        {:reply, response, _} = jog(second, 0.1)
+        assert response["result"]["accepted"] == true
+      end)
+      |> Task.await()
+
+      # No zero setpoint raced the stop in. The stop is the command.
+      assert [
+               {"axes.j1.jog", %{"velocity" => 0.4}},
+               {"axes.j1.stop", _},
+               {"axes.j1.jog", %{"velocity" => 0.1}} | _the_task_exiting
+             ] = Static.calls(source)
+    end
+
+    test "a jog the source refuses leaves no hold behind", context do
+      # A drive that is not enabled refuses a velocity setpoint. What must not
+      # happen is the axis being locked against every other session anyway,
+      # until a deadline nobody is asserting against runs out.
+      {:ok, refusing} = Static.start_link(values: %{}, reject: ["axes.j1.jog"])
+      session = held_session(:operator, %{context | source: refusing})
+
+      {:reply, response, _} = jog(session, 0.1)
+
+      assert response["error"]["code"] == Nodes.error_codes().write_rejected
+      assert ExProto.Jog.holder("axes.j1", context.jog) == :none
+    end
+
+    test "with no watchdog running, a jog is refused rather than started", context do
+      session = held_session(:operator, %{context | jog: :jog_never_started})
+
+      {:reply, response, _} = jog(session, 0.1)
+
+      # Fail closed. Motion nothing is left to stop must not start.
+      assert response["error"]["code"] == Nodes.error_codes().write_rejected
     end
   end
 end

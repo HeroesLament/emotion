@@ -66,7 +66,12 @@ defmodule ExProto.Socket do
     {:ok,
      %{
        session:
-         Session.new(table: opts.table, source: opts.source, principal: opts.principal),
+         Session.new(
+           table: opts.table,
+           source: opts.source,
+           principal: opts.principal,
+           jog: Map.get(opts, :jog, ExProto.Jog)
+         ),
        publisher: publisher,
        known: MapSet.new(),
        keepalive_ms: keepalive_ms

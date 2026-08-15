@@ -31,6 +31,7 @@ defmodule ExProto.Session do
     :table,
     :source,
     :principal,
+    jog: ExProto.Jog,
     initialized?: false,
     protocol_version: nil,
     client_info: nil,
@@ -43,6 +44,7 @@ defmodule ExProto.Session do
           table: map(),
           source: {module(), term()},
           principal: ExAuth.Principal.t() | nil,
+          jog: GenServer.server(),
           initialized?: boolean(),
           protocol_version: String.t() | nil,
           client_info: map() | nil,
@@ -68,7 +70,11 @@ defmodule ExProto.Session do
     %__MODULE__{
       table: Keyword.fetch!(opts, :table),
       source: Keyword.fetch!(opts, :source),
-      principal: Keyword.fetch!(opts, :principal)
+      principal: Keyword.fetch!(opts, :principal),
+      # Which watchdog guards the held commands on this connection. Named per
+      # endpoint rather than globally, so two controllers in one VM — which is
+      # what the test suite is — do not share one another's holds.
+      jog: Keyword.get(opts, :jog, ExProto.Jog)
     }
   end
 

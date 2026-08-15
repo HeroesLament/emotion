@@ -21,7 +21,8 @@ defmodule ExProto.Nodes do
   is not something this layer can honestly offer.
   """
 
-  alias ExProto.{Session, Source, Validate}
+  alias ExMo.Schema.Method
+  alias ExProto.{Jog, Session, Source, Validate}
 
   # Mirrors components/errors in the generated document.
   @not_initialized -32_000
@@ -36,6 +37,7 @@ defmodule ExProto.Nodes do
   @write_rejected -32_010
   @forbidden -32_011
   @not_callable -32_012
+  @node_held -32_013
 
   @invalid_params -32_602
 
@@ -56,7 +58,8 @@ defmodule ExProto.Nodes do
       too_many_subscriptions: @too_many_subscriptions,
       write_rejected: @write_rejected,
       forbidden: @forbidden,
-      not_callable: @not_callable
+      not_callable: @not_callable,
+      node_held: @node_held
     }
   end
 
@@ -368,18 +371,67 @@ defmodule ExProto.Nodes do
     with :ok <- require_initialized(session),
          {:ok, node_id} <- fetch_string(params, "nodeId"),
          {:ok, node} <- fetch_callable(session, node_id) do
-      {module, arg} = session.source
       args = Map.get(params, "arguments") || %{}
 
-      case Source.call(module, node_id, args, arg) do
-        :ok ->
-          {:ok, %{"nodeId" => node_id, "accepted" => true, "async" => node.async}}
+      if Method.watchdog?(node) do
+        assert_held(node, node_id, args, session)
+      else
+        invoke(node, node_id, args, session)
+      end
+    end
+    |> with_session(session)
+  end
+
+  # An ordinary command on a node that is being jogged supersedes the jog, and
+  # the hold goes with it. Releasing rather than zeroing first: whoever sent
+  # `stop` gets to decide what the axis does, and a zero setpoint racing their
+  # command in is a second opinion nobody asked for.
+  #
+  # It releases a hold belonging to another session on purpose. A stop that
+  # cannot stop a machine because someone else is holding the joystick is not a
+  # stop, and the person sending it can generally see the arm.
+  defp invoke(node, node_id, args, session) do
+    {module, arg} = session.source
+    Jog.release(node.parent, session.jog)
+
+    case Source.call(module, node_id, args, arg) do
+      :ok -> {:ok, %{"nodeId" => node_id, "accepted" => true, "async" => node.async}}
+      {:error, reason} -> call_error(reason)
+    end
+  end
+
+  # A held command. The hold is taken on the node's parent rather than on the
+  # method, so a second session cannot pick a different method on the same axis
+  # and move it out from under the first.
+  defp assert_held(node, node_id, args, session) do
+    with {:ok, args} <- watchdog_args(args) do
+      case Jog.assert(node.parent, node_id, args, session.source, self(), session.jog) do
+        {:ok, deadline} ->
+          {:ok,
+           %{
+             "nodeId" => node_id,
+             "accepted" => true,
+             "async" => node.async,
+             # Granted, not requested. A client that re-asserts on the deadline
+             # it asked for rather than the one it got will be stopped for it.
+             "deadlineMs" => deadline
+           }}
 
         {:error, reason} ->
           call_error(reason)
       end
     end
-    |> with_session(session)
+  end
+
+  # The one argument the watchdog itself depends on, checked here rather than
+  # left to the source: the controller has to know the neutral value of what it
+  # is asserting before it accepts responsibility for asserting it.
+  defp watchdog_args(args) do
+    case Map.get(args, "velocity") do
+      value when is_float(value) -> {:ok, args}
+      value when is_integer(value) -> {:ok, Map.put(args, "velocity", value * 1.0)}
+      _ -> {:error, @invalid_params, "Invalid params: arguments.velocity must be a number"}
+    end
   end
 
   defp fetch_callable(session, node_id) do
@@ -407,6 +459,18 @@ defmodule ExProto.Nodes do
     do: {:error, @not_callable, "This controller has no command bound to that node"}
 
   defp call_error(:unknown_node), do: {:error, @unknown_node, "No such node"}
+
+  defp call_error(:held),
+    do:
+      {:error, @node_held,
+       "Another session is holding this node. Only one may jog an axis at a time"}
+
+  # Fail closed. The watchdog being absent is a server fault, and the wrong
+  # thing to do with it is start motion that nothing is left to stop.
+  defp call_error(:unavailable),
+    do:
+      {:error, @write_rejected,
+       "The jog watchdog is not running; refusing to command motion nothing would stop"}
 
   # The command could not be started — not that it started and failed. What
   # happened after acceptance is on `state`.

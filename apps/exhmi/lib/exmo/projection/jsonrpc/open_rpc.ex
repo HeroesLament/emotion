@@ -303,6 +303,7 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
         error_ref("UnknownNode"),
         error_ref("NotCallable"),
         error_ref("Forbidden"),
+        error_ref("NodeHeld"),
         error_ref("WriteRejected")
       ]
     }
@@ -588,6 +589,12 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
       "NotCallable" => %{
         "code" => -32012,
         "message" => "Node is not a method, or this controller has no command bound to it."
+      },
+      "NodeHeld" => %{
+        "code" => -32013,
+        "message" =>
+          "Another session holds this node. Only one may jog an axis at a time; two " <>
+            "pendants alternating setpoints on one joint produce motion neither asked for."
       },
       "NotInitialized" => %{
         "code" => -32000,
