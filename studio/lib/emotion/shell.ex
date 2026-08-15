@@ -27,7 +27,7 @@ defmodule EMotion.Shell do
   use Cedar.Scene
 
   alias Cedar.Camera
-  alias EMotion.{Boot, Cell, Navigator, Scene, Workbench}
+  alias EMotion.{Boot, Cell, Controllers, Link, Navigator, Scene, Workbench}
   alias EMotion.Workbench.Registry
 
   require Logger
@@ -42,6 +42,7 @@ defmodule EMotion.Shell do
   def init(_opts) do
     boot = Boot.subscribe()
     cell = Cell.Server.subscribe()
+    Link.subscribe()
 
     Boot.run()
 
@@ -55,6 +56,7 @@ defmodule EMotion.Shell do
       surface: {1280, 800},
       workbench: workbench,
       workbench_state: init_workbench(workbench, cell),
+      controllers: Controllers.new(),
       status: "Starting…"
     }
   end
@@ -83,6 +85,12 @@ defmodule EMotion.Shell do
     # app that holds a splash to look substantial is just slower.
     {:noreply, if(progress.complete?, do: %{model | phase: :ready}, else: model)}
   end
+
+  def handle_info({:link, {:disconnected, reason}}, model) do
+    {:noreply, %{model | controllers: Controllers.disconnected(model.controllers, reason)}}
+  end
+
+  def handle_info({:link, _event}, model), do: {:noreply, model}
 
   def handle_info({:cell, cell}, model) do
     {:noreply, %{model | cell: cell}}
@@ -131,6 +139,30 @@ defmodule EMotion.Shell do
     end
   end
 
+  def handle_event({:dialog_result, id, result}, model) do
+    {state, effects} = Controllers.dialog(model.controllers, id, result)
+    run_effects(%{model | controllers: state}, effects)
+  end
+
+  def handle_event({:ui_event, :ctl_list, :change, index}, model) do
+    %{model | controllers: Controllers.select(model.controllers, index)}
+  end
+
+  def handle_event({:ui_event, :ctl_list, :double_click, index}, model) do
+    model
+    |> Map.put(:controllers, Controllers.select(model.controllers, index))
+    |> controller_action(:connect)
+  end
+
+  def handle_event({:ui_event, :ctl_add, :click}, model), do: controller_action(model, :add)
+  def handle_event({:ui_event, :ctl_edit, :click}, model), do: controller_action(model, :edit)
+  def handle_event({:ui_event, :ctl_remove, :click}, model), do: controller_action(model, :remove)
+  def handle_event({:ui_event, :ctl_props, :click}, model), do: controller_action(model, :properties)
+  def handle_event({:ui_event, :ctl_connect, :click}, model), do: controller_action(model, :connect)
+
+  def handle_event({:ui_event, :ctl_disconnect, :click}, model),
+    do: controller_action(model, :disconnect)
+
   def handle_event({:ui_event, :view_iso, :click}, model), do: look(model, :iso)
   def handle_event({:ui_event, :view_top, :click}, model), do: look(model, :top)
   def handle_event({:ui_event, :view_front, :click}, model), do: look(model, :front)
@@ -155,6 +187,48 @@ defmodule EMotion.Shell do
   end
 
   def handle_event(_event, model), do: model
+
+  # Controllers returns effects rather than performing them, so this is the one
+  # place the tab touches the world.
+  defp controller_action(model, action) do
+    {state, effects} = Controllers.action(model.controllers, action)
+    run_effects(%{model | controllers: state}, effects)
+  end
+
+  defp run_effects(model, effects), do: Enum.reduce(effects, model, &run_effect/2)
+
+  # A dialog is a one-shot action, not a piece of state, so it is pushed
+  # straight at the renderer rather than declared in view/1. Cedar marks
+  # :show_dialog non-diffable, which means a dialog left in a view would
+  # re-open on every render until the model changed — an unclosable modal.
+  defp run_effect({:dialog, id, opts}, model) do
+    Cedar.Renderer.render({:show_dialog, id, :form, :main, opts})
+    model
+  end
+
+  defp run_effect({:save, profiles}, model) do
+    EMotion.Controller.Profile.save(profiles)
+    model
+  end
+
+  defp run_effect({:connect, profile, opts}, model) do
+    # Connecting is a blocking call into the link, which in turn does a TLS
+    # handshake. Done here rather than in a Task because the shell must not
+    # render a half-connected state, and because the link itself is the thing
+    # that serialises access to the controller.
+    case Link.connect(profile, opts) do
+      {:ok, info} ->
+        %{model | controllers: Controllers.connected(model.controllers, profile.name, info)}
+
+      {:error, reason} ->
+        %{model | controllers: Controllers.failed(model.controllers, reason)}
+    end
+  end
+
+  defp run_effect(:disconnect, model) do
+    Link.disconnect()
+    model
+  end
 
   defp look(model, direction) do
     %{model | navigator: Navigator.update_camera(model.navigator, &Camera.look(&1, direction))}
@@ -199,13 +273,36 @@ defmodule EMotion.Shell do
       {:ensure_window, :main, title: @title, size: {1440, 900}},
       {:ensure_panel, :root, :main, []},
 
-      # -- toolbar --------------------------------------------------------
-      {:ensure_widget, :workbench_label, :static_text, :root, label: "Workbench:"},
-      {:ensure_widget, :workbench_choice, :choice, :root, choices: workbench_names()},
-      {:ensure_widget, :view_iso, :button, :root, label: "Iso"},
-      {:ensure_widget, :view_top, :button, :root, label: "Top"},
-      {:ensure_widget, :view_front, :button, :root, label: "Front"},
-      {:ensure_widget, :view_fit, :button, :root, label: "Fit"},
+      # -- ribbon ---------------------------------------------------------
+      # A fixed-height strip. Without a minimum size a notebook takes its best
+      # size from its busiest page, so the Controllers list would decide how
+      # tall the bar is for every tab.
+      {:ensure_widget, :ribbon, :notebook, :root, size: {0, 170}},
+
+      {:ensure_panel, :tab_view, :ribbon, label: "View"},
+      {:ensure_widget, :workbench_label, :static_text, :tab_view, label: "Workbench:"},
+      {:ensure_widget, :workbench_choice, :choice, :tab_view, choices: workbench_names()},
+      {:ensure_widget, :view_iso, :button, :tab_view, label: "Iso"},
+      {:ensure_widget, :view_top, :button, :tab_view, label: "Top"},
+      {:ensure_widget, :view_front, :button, :tab_view, label: "Front"},
+      {:ensure_widget, :view_fit, :button, :tab_view, label: "Fit"},
+      {:layout, :tab_view,
+       {:vbox, [padding: 10],
+        [
+          {:hbox, [],
+           [
+             :workbench_label,
+             :workbench_choice,
+             {:spacer, 24},
+             :view_iso,
+             :view_top,
+             :view_front,
+             {:spacer, 8},
+             :view_fit
+           ]},
+          {:spacer, 8}
+        ]}}
+    ] ++ controllers_tab(model) ++ [
 
       # -- viewport -------------------------------------------------------
       {:ensure_visual, :viewport, :viewport, :root,
@@ -225,17 +322,7 @@ defmodule EMotion.Shell do
         {:layout, :root,
          {:vbox, [padding: 8],
           [
-            {:hbox, [],
-             [
-               :workbench_label,
-               :workbench_choice,
-               {:spacer, 24},
-               :view_iso,
-               :view_top,
-               :view_front,
-               {:spacer, 8},
-               :view_fit
-             ]},
+            {:ribbon, proportion: 0, flag: :expand},
             {:spacer, 6},
             {:viewport, proportion: 1, flag: :expand},
             {:spacer, 6},
@@ -246,6 +333,60 @@ defmodule EMotion.Shell do
   end
 
   # ==========================================================================
+
+  defp controllers_tab(model) do
+    state = model.controllers
+    enabled = Controllers.enabled(state)
+    labels = Controllers.labels(state)
+    selected_index = selected_index(state)
+
+    [
+      {:ensure_panel, :tab_controllers, :ribbon, label: "Controllers"},
+      {:ensure_widget, :ctl_list, :list_box, :tab_controllers, choices: labels},
+      {:set, :ctl_list, items: labels},
+      {:set, :ctl_list, selected: selected_index},
+      {:ensure_widget, :ctl_add, :button, :tab_controllers, label: "Add…"},
+      {:ensure_widget, :ctl_edit, :button, :tab_controllers, label: "Edit…"},
+      {:ensure_widget, :ctl_remove, :button, :tab_controllers, label: "Remove"},
+      {:ensure_widget, :ctl_props, :button, :tab_controllers, label: "Properties…"},
+      {:ensure_widget, :ctl_connect, :button, :tab_controllers, label: "Connect"},
+      {:ensure_widget, :ctl_disconnect, :button, :tab_controllers, label: "Disconnect"},
+      {:ensure_widget, :ctl_status, :static_text, :tab_controllers, label: state.status},
+      {:set, :ctl_status, label: state.status},
+      {:set, :ctl_add, enabled: enabled.add},
+      {:set, :ctl_edit, enabled: enabled.edit},
+      {:set, :ctl_remove, enabled: enabled.remove},
+      {:set, :ctl_props, enabled: enabled.properties},
+      {:set, :ctl_connect, enabled: enabled.connect},
+      {:set, :ctl_disconnect, enabled: enabled.disconnect},
+      {:layout, :tab_controllers,
+       {:vbox, [padding: 10],
+        [
+          {:hbox, [proportion: 1],
+           [
+             {:ctl_list, proportion: 1, flag: :expand},
+             {:spacer, 12},
+             {:vbox, [],
+              [
+                :ctl_add,
+                :ctl_edit,
+                :ctl_remove,
+                {:spacer, 8},
+                :ctl_props,
+                {:spacer, 8},
+                :ctl_connect,
+                :ctl_disconnect
+              ]}
+           ]},
+          {:spacer, 6},
+          :ctl_status
+        ]}}
+    ]
+  end
+
+  defp selected_index(state) do
+    Enum.find_index(state.profiles, &(&1.name == state.selected)) || -1
+  end
 
   defp workbench_names do
     Enum.map(Registry.listing(), fn {_module, name, _description} -> name end)

@@ -84,6 +84,37 @@ defmodule EMotion.Controller.Profile do
     File.write!(file, body)
   end
 
+  @doc """
+  Inserts or replaces a profile, matched by name.
+
+  Name is the identity — it is what the token file is keyed on and what an
+  engineer types — so editing a controller and renaming it is an add plus a
+  remove, not an update. `put/3` takes the old name explicitly for that reason
+  rather than guessing which of two names is the current one.
+  """
+  @spec put([t()], t(), String.t() | nil) :: [t()]
+  def put(profiles, %__MODULE__{} = profile, replacing \\ nil) do
+    drop = MapSet.new([profile.name, replacing] |> Enum.reject(&is_nil/1))
+
+    profiles
+    |> Enum.reject(&MapSet.member?(drop, &1.name))
+    |> Kernel.++([profile])
+    |> Enum.sort_by(& &1.name)
+  end
+
+  @doc """
+  Removes a profile and forgets its token.
+
+  Dropping the token matters: a profile removed while its token file stayed
+  behind would silently reconnect without asking for a password if someone
+  later added a controller with the same name.
+  """
+  @spec delete([t()], String.t()) :: [t()]
+  def delete(profiles, name) do
+    drop_token(name)
+    Enum.reject(profiles, &(&1.name == name))
+  end
+
   @doc "Finds a profile by name."
   @spec fetch([t()], String.t()) :: {:ok, t()} | :error
   def fetch(profiles, name) do
