@@ -41,3 +41,6 @@ exmo_hmi.zip
 
 # Stray compiled BEAM files outside _build
 *.beam
+
+# Local controller state: dev credential database and self-signed TLS material.
+.emotion/

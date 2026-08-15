@@ -35,6 +35,10 @@ defmodule Exproto.MixProject do
       # ExProto.Router; grants are checked against the model in ExProto.Nodes.
       {:exauth, in_umbrella: true},
 
+      # The simulated drives the controller serves. ExProto.Source.Exdrive binds
+      # the node table to them.
+      {:exdrive, in_umbrella: true},
+
       # Transport. Bandit rather than Cowboy: pure Elixir, smaller on a Nerves
       # image, and the WebSock specification is the supported way to speak
       # WebSocket without dragging Phoenix in.

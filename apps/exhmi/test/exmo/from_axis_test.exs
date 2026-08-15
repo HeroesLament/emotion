@@ -115,10 +115,18 @@ defmodule ExMo.Schema.FromAxisTest do
       refute "AtHome" in names
     end
 
-    test "Direction is writable and observable", %{obj: obj} do
+    test "Direction is observable and read-only", %{obj: obj} do
       dir = Enum.find(obj.children, & &1.name == "Direction")
-      assert dir.writable   == true
+
       assert dir.observable == true
+
+      # Was writable until a source had to implement it. Direction is derived
+      # from the sign of the measured velocity — there is no CiA 402 object to
+      # write it to, and a drive asked to "be clockwise" has been asked
+      # nothing. Motion is commanded through TargetPosition or a velocity
+      # setpoint; this reports which way the axis is going.
+      assert dir.writable == false
+      assert is_nil(dir.write_grant)
     end
 
     test "the SI unit appears in the Velocity description", %{obj: obj} do

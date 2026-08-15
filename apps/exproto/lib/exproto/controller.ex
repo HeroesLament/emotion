@@ -1,0 +1,97 @@
+defmodule ExProto.Controller do
+  @moduledoc """
+  Brings up a whole running controller: drives, node table, endpoint.
+
+  This is the composition root — the one place that knows the simulated arm,
+  the Information Model and the JSON-RPC transport are meant to be the same
+  machine. Everything it wires together was already testable on its own, which
+  is why this module is short and has no logic worth testing in it.
+
+  ## What it starts
+
+  A `Exdrive.Drive` per axis declared in the model, the model projected into a
+  node table, and `ExProto.Endpoint` over TLS bound to those drives through
+  `ExProto.Source.Exdrive`.
+
+  Drives run on their internal 1 kHz clock here. A controller with the FPGA
+  metronome fitted would pass `clock: :external` and step them from the
+  fieldbus instead; nothing else in this module changes.
+
+  ## Usage
+
+      ExProto.Controller.start_link(port: 4001)
+
+  or `mix exmo.controller`, which is the same thing with a console attached.
+  """
+
+  require Logger
+
+  alias ExMo.InformationModel
+  alias ExMo.Projection.JSONRPC
+  alias ExProto.{Endpoint, Source}
+
+  @doc """
+  Starts drives and the endpoint.
+
+  Options:
+
+    * `:port` — defaults to 4001
+    * `:scheme` — `:https` (default) or `:http`
+    * `:tls` — passed to `ExProto.TLS.material/1`; `:dir` is where the
+      certificate lives
+    * `:clock` — `:internal` (default) or `:external`
+  """
+  def start_link(opts \\ []) do
+    with {:ok, table} <- node_table(),
+         :ok <- start_drives(table, Keyword.get(opts, :clock, :internal)) do
+      endpoint_opts =
+        opts
+        |> Keyword.take([:port, :scheme, :tls])
+        |> Keyword.merge(table: table, source: {Source.Exdrive, nil})
+
+      Endpoint.start_link(endpoint_opts)
+    end
+  end
+
+  @doc "The projected node table this controller serves."
+  def node_table do
+    with {:ok, model} <- InformationModel.compiled_model() do
+      JSONRPC.project(model)
+    end
+  end
+
+  @doc """
+  The axis ids the model declares, which is what the drives are named after.
+
+  Derived from the table rather than from a second list, so a model that grows
+  an axis does not need this module edited — and cannot end up with a node that
+  has no drive because someone updated one list and not the other.
+  """
+  def axes(table) do
+    table
+    |> JSONRPC.filter(:property)
+    |> Enum.flat_map(fn node ->
+      case String.split(node.node_id, ".") do
+        ["axes", axis, _field] -> [axis]
+        _ -> []
+      end
+    end)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp start_drives(table, clock) do
+    axes = axes(table)
+
+    Enum.each(axes, fn axis ->
+      case Exdrive.Supervisor.start_drive(axis_id: axis, clock: clock) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, reason} -> Logger.error("could not start axis #{axis}: #{inspect(reason)}")
+      end
+    end)
+
+    Logger.info("E-Motion controller: #{length(axes)} axes running — #{Enum.join(axes, ", ")}")
+    :ok
+  end
+end

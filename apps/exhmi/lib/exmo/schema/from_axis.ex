@@ -183,9 +183,12 @@ defmodule ExMo.Schema.FromAxis do
         description: "Rotation direction: cw | ccw | stopped",
         type: :string,
         readable: true,
-        writable: true,
-        observable: true,
-        write_grant: :write_setpoint
+        # Read-only. Direction is an observation derived from the sign of the
+        # measured velocity, not a setpoint — there is no object in CiA 402 to
+        # write it to, and a drive asked to "be clockwise" has been asked
+        # nothing. Commanding motion is target_position or target_velocity.
+        writable: false,
+        observable: true
       }
     ]
   end
