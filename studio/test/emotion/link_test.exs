@@ -47,8 +47,20 @@ defmodule EMotion.LinkTest do
       assert Link.status(name: link) == :disconnected
     end
 
-    test "jogging while disconnected is refused, not queued", %{link: link} do
-      assert {:error, :not_connected} = Link.jog(:j1, 1.0, name: link)
+    test "commanding while disconnected is refused, not queued", %{link: link} do
+      assert {:error, :not_connected} = Link.move_to(:j1, 1.0, name: link)
+    end
+
+    test "a jog assertion while disconnected is refused too", %{link: link} do
+      # The path that matters most: EMotion.Jog asserts on a timer, so a link
+      # that queued or blocked here would have a pendant piling up assertions
+      # against a controller that is not there, and delivering them all at once
+      # if it ever came back.
+      assert {:error, :not_connected} = Link.hold(:j1, 0.25, name: link)
+    end
+
+    test "reading while disconnected is refused", %{link: link} do
+      assert {:error, :not_connected} = Link.read(["axes.j1.position"], name: link)
     end
 
     test "connecting with no stored token and no password says so", %{link: link, tmp: tmp, known_hosts: kh} do
