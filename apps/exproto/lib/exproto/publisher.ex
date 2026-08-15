@@ -51,6 +51,20 @@ defmodule ExProto.Publisher do
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
+  @method "notifications/nodes/changed"
+
+  @doc """
+  The JSON-RPC method name a value notification carries.
+
+  A function rather than a literal in two places. `ExProto.Client` and
+  `mix exmo.rpc` filter incoming frames on this, and when the name lived as a
+  string at each end the client silently matched nothing — a subscription that
+  delivers correctly and a client that shows nothing look identical from the
+  outside, which is the worst way to find a typo.
+  """
+  @spec method() :: String.t()
+  def method, do: @method
+
   @doc """
   Registers a subscription.
 
@@ -148,7 +162,7 @@ defmodule ExProto.Publisher do
       else
         %{
           "jsonrpc" => "2.0",
-          "method" => "notifications/nodes/changed",
+          "method" => method(),
           "params" => %{
             "subscriptionId" => subscription.id,
             "seq" => seq,

@@ -49,10 +49,13 @@ defmodule Exproto.MixProject do
       # shelling out to openssl, which a Nerves image should not have to carry.
       {:x509, "~> 0.8"},
 
-      # A real WebSocket client, so the end-to-end tests speak TLS to the actual
-      # listener rather than asserting against a mock of it.
-      {:mint_web_socket, "~> 1.0", only: :test},
-      {:castore, "~> 1.0", only: :test}
+      # A real WebSocket client. Used by the end-to-end tests, so they speak TLS
+      # to the actual listener rather than asserting against a mock — and by
+      # ExProto.Client, which is the same code path `mix exmo.rpc` and
+      # eventually Studio talk to the controller through. Shipping the client
+      # beside the server is what keeps them from drifting.
+      {:mint_web_socket, "~> 1.0"},
+      {:castore, "~> 1.0"}
     ]
   end
 end
