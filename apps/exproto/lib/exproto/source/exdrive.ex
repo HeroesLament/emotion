@@ -85,6 +85,50 @@ defmodule ExProto.Source.Exdrive do
     end
   end
 
+  # ── Commands ──────────────────────────────────────────────────────────────
+
+  @impl ExProto.Source
+  def call(node_id, _args, _arg) do
+    case parse(node_id) do
+      {:ok, axis, command} -> command(axis, command)
+      :error -> {:error, :unknown_node}
+    end
+  end
+
+  # Accepted, not completed. Every one of these is a cast into a state machine
+  # that decides for itself what to do with it; the outcome is observed on the
+  # axis's `state`. Checking the drive is reachable first means an axis whose
+  # process is gone reports :rejected rather than silently swallowing the
+  # command — a cast to a dead name would look like success.
+  defp command(axis, name) do
+    with {:ok, _status} <- status(axis) do
+      case name do
+        "enable" -> Exdrive.Drive.enable(axis) && :ok
+        "disable" -> Exdrive.Drive.control_word(axis, 0x0000) && :ok
+        # Quick stop: decelerate on the quick-stop ramp and hold. Not an
+        # emergency stop — that is a hardware circuit and does not travel
+        # through this protocol.
+        "stop" -> Exdrive.Drive.quick_stop(axis) && :ok
+        "reset_fault" -> Exdrive.Drive.fault_reset(axis) && :ok
+        "home" -> home(axis)
+        _ -> {:error, :not_callable}
+      end
+    end
+  end
+
+  defp home(axis) do
+    with {:ok, _} <- set_mode(axis, :homing) do
+      Exdrive.Drive.enable(axis)
+      :ok
+    end
+  end
+
+  defp set_mode(axis, mode) do
+    {:ok, Exdrive.Drive.set_mode(axis, mode)}
+  catch
+    :exit, _reason -> {:error, :rejected}
+  end
+
   # ── Projection: drive status → model nodes ────────────────────────────────
 
   defp project(node_id, status) do

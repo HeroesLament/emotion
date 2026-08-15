@@ -32,8 +32,10 @@ defmodule ExProto.Source do
     * `:not_readable` / `:not_writable` — the node exists but not for this
     * `:rejected` — the controller refused in its current state, e.g. a write
       to an axis that is not enabled
+    * `:not_callable` — the node exists but this source has no command for it
   """
-  @type reason :: :unknown_node | :not_readable | :not_writable | :rejected
+  @type reason ::
+          :unknown_node | :not_readable | :not_writable | :not_callable | :rejected
 
   @doc "Reads one node's current value."
   @callback read(node_id(), term()) :: {:ok, value()} | {:error, reason()}
@@ -57,7 +59,40 @@ defmodule ExProto.Source do
   """
   @callback read_many([node_id()], term()) :: [{node_id(), {:ok, value()} | {:error, reason()}}]
 
-  @optional_callbacks read_many: 2
+  @doc """
+  Invokes a method node.
+
+  Optional: a source with no commands does not implement it, and the dispatcher
+  answers `:not_callable` for every method rather than crashing.
+
+  ## Acceptance, not completion
+
+  Every axis command in the model is asynchronous, and this returns when the
+  command has been *accepted*, not when the machine has finished doing it. A
+  CiA 402 enable is three control words through a state machine that may refuse
+  them; homing takes as long as it takes. The outcome is observed on the axis's
+  `state`, which is subscribable, rather than reported here — a call that
+  blocked until the drive agreed would be describing a machine that had not
+  finished moving.
+
+  `{:error, :rejected}` therefore means the command could not even be started,
+  not that it failed.
+  """
+  @callback call(node_id(), args :: map(), term()) :: :ok | {:error, reason()}
+
+  @optional_callbacks read_many: 2, call: 3
+
+  @doc """
+  Invokes a method through a source, or reports that it has none.
+  """
+  @spec call(module(), node_id(), map(), term()) :: :ok | {:error, reason()}
+  def call(module, node_id, args, arg) do
+    if function_exported?(module, :call, 3) do
+      module.call(node_id, args, arg)
+    else
+      {:error, :not_callable}
+    end
+  end
 
   @doc """
   Reads several nodes through a source, using its batch path when it has one.

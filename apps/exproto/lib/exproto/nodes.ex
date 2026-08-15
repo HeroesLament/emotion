@@ -35,6 +35,7 @@ defmodule ExProto.Nodes do
   @too_many_subscriptions -32_008
   @write_rejected -32_010
   @forbidden -32_011
+  @not_callable -32_012
 
   @invalid_params -32_602
 
@@ -54,7 +55,8 @@ defmodule ExProto.Nodes do
       invalid_value: @invalid_value,
       too_many_subscriptions: @too_many_subscriptions,
       write_rejected: @write_rejected,
-      forbidden: @forbidden
+      forbidden: @forbidden,
+      not_callable: @not_callable
     }
   end
 
@@ -345,6 +347,75 @@ defmodule ExProto.Nodes do
   defp write_error(id, reason) do
     %{"nodeId" => id, "ok" => false, "error" => error_body(reason)}
   end
+
+  # ── call ──────────────────────────────────────────────────────────────────
+
+  @doc """
+  Invokes a method node.
+
+  ## Acceptance, not completion
+
+  Every command the model declares is asynchronous, and this returns when one
+  has been accepted rather than when the machine has finished. A CiA 402 enable
+  is three control words through a state machine that may refuse them; homing
+  takes as long as it takes. Blocking until the drive agreed would make the
+  protocol describe a machine mid-movement as though it had stopped.
+
+  So the result is an acceptance, and the outcome is watched on the axis's
+  `state`, which is subscribable and which an operator is watching anyway.
+  """
+  def call(params, session) do
+    with :ok <- require_initialized(session),
+         {:ok, node_id} <- fetch_string(params, "nodeId"),
+         {:ok, node} <- fetch_callable(session, node_id) do
+      {module, arg} = session.source
+      args = Map.get(params, "arguments") || %{}
+
+      case Source.call(module, node_id, args, arg) do
+        :ok ->
+          {:ok, %{"nodeId" => node_id, "accepted" => true, "async" => node.async}}
+
+        {:error, reason} ->
+          call_error(reason)
+      end
+    end
+    |> with_session(session)
+  end
+
+  defp fetch_callable(session, node_id) do
+    case Session.fetch_node(session, node_id) do
+      {:ok, %{class: :method} = node} ->
+        # Authorisation before invocation, and before validating arguments: a
+        # caller without the grant learns nothing about whether its arguments
+        # would have been accepted.
+        if Session.can?(session, node.call_grant) do
+          {:ok, node}
+        else
+          {:error, @forbidden, "Requires the #{node.call_grant} grant",
+           %{"nodeId" => node_id, "requiredGrant" => Atom.to_string(node.call_grant)}}
+        end
+
+      {:ok, _other} ->
+        {:error, @not_callable, "Node is not a method: #{node_id}"}
+
+      :error ->
+        {:error, @unknown_node, "No such node: #{node_id}"}
+    end
+  end
+
+  defp call_error(:not_callable),
+    do: {:error, @not_callable, "This controller has no command bound to that node"}
+
+  defp call_error(:unknown_node), do: {:error, @unknown_node, "No such node"}
+
+  # The command could not be started — not that it started and failed. What
+  # happened after acceptance is on `state`.
+  defp call_error(:rejected),
+    do: {:error, @write_rejected, "The controller refused the command in its current state"}
+
+  defp call_error(other),
+    do: {:error, @write_rejected, "Unmapped source error: #{inspect(other)}"}
+
 
   # ── subscribe ─────────────────────────────────────────────────────────────
 

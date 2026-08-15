@@ -27,13 +27,15 @@ defmodule ExProto.Source.Static do
     * `:values` — initial `node_id => value` map
     * `:clamp` — `node_id => {min, max}`, values outside are clamped and the
       clamped value reported back
-    * `:reject` — node ids whose writes are refused, as an unenabled drive would
+    * `:reject` — node ids whose writes and calls are refused, as an unenabled
+      drive would
   """
   def start_link(opts \\ []) do
     state = %{
       values: Keyword.get(opts, :values, %{}),
       clamp: Keyword.get(opts, :clamp, %{}),
-      reject: MapSet.new(Keyword.get(opts, :reject, []))
+      reject: MapSet.new(Keyword.get(opts, :reject, [])),
+      calls: []
     }
 
     Agent.start_link(fn -> state end)
@@ -65,6 +67,29 @@ defmodule ExProto.Source.Static do
       end
     end)
   end
+
+  @impl ExProto.Source
+  def call(node_id, args, pid) do
+    Agent.get_and_update(pid, fn state ->
+      if MapSet.member?(state.reject, node_id) do
+        {{:error, :rejected}, state}
+      else
+        # Recorded rather than executed. There is no machine here, and what a
+        # test wants to know is that the command reached the source with its
+        # arguments intact — everything past that is the drive's business.
+        {:ok, %{state | calls: state.calls ++ [{node_id, args}]}}
+      end
+    end)
+  end
+
+  @doc """
+  Every command this source was asked to run, oldest first.
+
+  There is nothing to observe otherwise: commands are accepted rather than
+  completed, so a test asserting on the reply alone cannot tell a command that
+  arrived from one that was dropped on the way.
+  """
+  def calls(pid), do: Agent.get(pid, & &1.calls)
 
   @doc "Sets a value directly, as a drive moving would."
   def put(pid, node_id, value) do

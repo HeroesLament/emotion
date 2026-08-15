@@ -58,6 +58,7 @@ defmodule ExMo.Projection.JSONRPC.OpenRPCTest do
       assert names == [
                "initialize",
                "nodes/browse",
+               "nodes/call",
                "nodes/read",
                "nodes/subscribe",
                "nodes/unsubscribe",

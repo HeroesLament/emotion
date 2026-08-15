@@ -161,6 +161,7 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
       browse_method(),
       read_method(),
       write_method(),
+      call_method(),
       subscribe_method(),
       unsubscribe_method(),
       changed_notification()
@@ -270,6 +271,40 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
       ],
       "result" => content("writeResult", ref("WriteResult")),
       "errors" => [error_ref("NotInitialized")]
+    }
+  end
+
+  defp call_method do
+    %{
+      "name" => "nodes/call",
+      "summary" => "Invoke a method node.",
+      "description" => """
+      Commands are asynchronous and this returns an *acceptance*, not a result.
+      A CiA 402 enable is three control words through a state machine that may
+      refuse them; homing takes as long as it takes. A call that blocked until
+      the drive agreed would describe a machine mid-movement as though it had
+      stopped.
+
+      Watch the axis's `state` for the outcome. It is subscribable, it uses one
+      vocabulary on every interface, and it is what an operator watches anyway.
+
+      Which commands exist depends on how the axis is driven: browse the axis
+      and call what is there. A PWM servo has no `reset_fault` because it
+      cannot report a fault.
+      """,
+      "paramStructure" => "by-name",
+      "params" => [
+        content("nodeId", %{"type" => "string"}, true),
+        content("arguments", %{"type" => "object"}, false)
+      ],
+      "result" => content("acceptance", ref("CallAcceptance")),
+      "errors" => [
+        error_ref("NotInitialized"),
+        error_ref("UnknownNode"),
+        error_ref("NotCallable"),
+        error_ref("Forbidden"),
+        error_ref("WriteRejected")
+      ]
     }
   end
 
@@ -514,6 +549,23 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
           }
         }
       },
+      "CallAcceptance" => %{
+        "type" => "object",
+        "required" => ["nodeId", "accepted", "async"],
+        "description" =>
+          "The command was accepted for execution. It does not say the machine " <>
+            "has finished, or started — watch the axis's state for that.",
+        "properties" => %{
+          "nodeId" => %{"type" => "string"},
+          "accepted" => %{"type" => "boolean"},
+          "async" => %{
+            "type" => "boolean",
+            "description" =>
+              "True for every command this build declares. Present so a client " <>
+                "does not have to assume it."
+          }
+        }
+      },
       "Subscription" => %{
         "type" => "object",
         "required" => ["subscriptionId", "nodeIds", "rateHz"],
@@ -533,6 +585,10 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
 
   defp errors do
     %{
+      "NotCallable" => %{
+        "code" => -32012,
+        "message" => "Node is not a method, or this controller has no command bound to it."
+      },
       "NotInitialized" => %{
         "code" => -32000,
         "message" => "Session not initialized; call initialize first."

@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       mix exmo.rpc browse [nodeId]
       mix exmo.rpc read <nodeId> [nodeId...]
       mix exmo.rpc write <nodeId> <value>
+      mix exmo.rpc call <nodeId>
       mix exmo.rpc watch <nodeId> [nodeId...] [--rate 5] [--for 10]
 
   Options: `--host` (localhost), `--port` (4001), `--user`, `--insecure`.
@@ -52,6 +53,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       ["browse", node] -> with_session(host, port, conn_opts, &browse(&1, &2, node))
       ["read" | ids] when ids != [] -> with_session(host, port, conn_opts, &read(&1, &2, ids))
       ["write", node, value] -> with_session(host, port, conn_opts, &write(&1, &2, node, value))
+      ["call", node] -> with_session(host, port, conn_opts, &invoke(&1, &2, node))
       ["watch" | ids] when ids != [] -> with_session(host, port, conn_opts, &watch(&1, &2, ids, opts))
       _ -> Mix.shell().info(@moduledoc)
     end
@@ -210,6 +212,27 @@ defmodule Mix.Tasks.Exmo.Rpc do
 
       {:ok, _session, %{"error" => error}} ->
         Mix.shell().error("#{error["message"]} (#{error["code"]})")
+    end
+  end
+
+  defp invoke(session, _result, node_id) do
+    case Client.request(session, "nodes/call", %{"nodeId" => node_id}) do
+      {:ok, _session, %{"result" => result}} ->
+        # Accepted, not finished. Saying so here rather than printing something
+        # that reads like completion, because the difference matters on a
+        # machine that takes time to obey.
+        Mix.shell().info("  #{result["nodeId"]} accepted")
+
+        if result["async"] do
+          Mix.shell().info("  watch the axis state for the outcome: mix exmo.rpc watch <axis>.state")
+        end
+
+      {:ok, _session, %{"error" => error}} ->
+        Mix.shell().error("  #{error["message"]} (#{error["code"]})")
+
+        if grant = get_in(error, ["data", "requiredGrant"]) do
+          Mix.shell().error("  this account does not hold the #{grant} grant")
+        end
     end
   end
 

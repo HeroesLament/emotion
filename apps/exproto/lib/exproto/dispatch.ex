@@ -125,6 +125,7 @@ defmodule ExProto.Dispatch do
   defp route("nodes/browse", params, session), do: Nodes.browse(params, session)
   defp route("nodes/read", params, session), do: Nodes.read(params, session)
   defp route("nodes/write", params, session), do: Nodes.write(params, session)
+  defp route("nodes/call", params, session), do: Nodes.call(params, session)
   defp route("nodes/subscribe", params, session), do: Nodes.subscribe(params, session)
   defp route("nodes/unsubscribe", params, session), do: Nodes.unsubscribe(params, session)
 

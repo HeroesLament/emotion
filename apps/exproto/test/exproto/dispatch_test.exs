@@ -656,4 +656,97 @@ defmodule ExProto.DispatchTest do
       assert code == Nodes.error_codes().forbidden
     end
   end
+
+  # ── commands ──────────────────────────────────────────────────────────────
+
+  describe "nodes/call" do
+    test "an operator may enable an axis", context do
+      session = :operator |> session_as(context) |> ready()
+
+      {:reply, response, _} = call(session, "nodes/call", %{"nodeId" => "axes.j1.enable"}, 2)
+
+      # An acceptance, not a result. The machine may still refuse; that shows
+      # up on `state`, not here.
+      assert response["result"]["accepted"] == true
+      assert response["result"]["async"] == true
+    end
+
+    test "an observer may not", context do
+      session = :observer |> session_as(context) |> ready()
+
+      {:reply, response, _} = call(session, "nodes/call", %{"nodeId" => "axes.j1.enable"}, 2)
+
+      assert response["error"]["code"] == Nodes.error_codes().forbidden
+      assert response["error"]["data"]["requiredGrant"] == "enable_drives"
+    end
+
+    test "a property is not callable", context do
+      session = :operator |> session_as(context) |> ready()
+
+      {:reply, response, _} = call(session, "nodes/call", %{"nodeId" => "axes.j1.position"}, 2)
+
+      assert response["error"]["code"] == Nodes.error_codes().not_callable
+    end
+
+    test "an unknown node is unknown, not uncallable", context do
+      session = :operator |> session_as(context) |> ready()
+
+      {:reply, response, _} = call(session, "nodes/call", %{"nodeId" => "axes.j9.enable"}, 2)
+
+      assert response["error"]["code"] == Nodes.error_codes().unknown_node
+    end
+
+    test "the command reaches the source with its arguments", %{source: source} = context do
+      session = :operator |> session_as(context) |> ready()
+
+      {:reply, _response, _} =
+        call(session, "nodes/call", %{"nodeId" => "axes.j1.home", "arguments" => %{"speed" => 0.2}}, 2)
+
+      # An acceptance says nothing about arrival, so this checks the far side.
+      assert [{"axes.j1.home", %{"speed" => 0.2}}] = Static.calls(source)
+    end
+
+    test "a source with no commands says so rather than crashing", %{table: table} do
+      # The call callback is optional; a source that does not implement it must
+      # produce an error, not a crash.
+      defmodule Commandless do
+        @behaviour ExProto.Source
+        @impl true
+        def read(_id, _arg), do: {:error, :unknown_node}
+        @impl true
+        def write(_id, _value, _arg), do: {:error, :not_writable}
+      end
+
+      session =
+        ExProto.Session.new(
+          table: table,
+          source: {Commandless, nil},
+          principal: ExAuth.Principal.new(%{id: 1, username: "op", role: :operator})
+        )
+        |> ready()
+
+      {:reply, response, _} = call(session, "nodes/call", %{"nodeId" => "axes.j1.enable"}, 2)
+
+      assert response["error"]["code"] == Nodes.error_codes().not_callable
+    end
+
+    test "authorisation is checked before the source is asked anything", context do
+      # An observer calling a node this source could not execute anyway must
+      # still be told it lacks the grant — otherwise the error leaks which
+      # commands the controller happens to have bound.
+      session = :observer |> session_as(context) |> ready()
+
+      {:reply, response, _} = call(session, "nodes/call", %{"nodeId" => "axes.j1.home"}, 2)
+
+      assert response["error"]["code"] == Nodes.error_codes().forbidden
+    end
+
+    test "a missing nodeId is invalid params", context do
+      session = :operator |> session_as(context) |> ready()
+
+      {:reply, response, _} = call(session, "nodes/call", %{}, 2)
+
+      assert response["error"]["code"] == -32_602
+    end
+  end
 end
