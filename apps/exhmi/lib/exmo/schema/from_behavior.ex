@@ -90,7 +90,12 @@ defmodule ExMo.Schema.FromBehavior do
       description: "Invoke the #{defn.name} behavior",
       input_args:  defn.input_args,
       output_args: defn.output_args,
-      async:       defn.async
+      async:       defn.async,
+      # A behavior runs a program on the machine, so it needs the grant that
+      # says so rather than the one that commands a single axis. Fixed rather
+      # than read off the definition: a behavior that could name its own grant
+      # could name a weaker one.
+      call_grant:  :execute_program
     }
   end
 

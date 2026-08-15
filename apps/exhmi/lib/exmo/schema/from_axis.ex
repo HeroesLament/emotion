@@ -85,7 +85,7 @@ defmodule ExMo.Schema.FromAxis do
       object = ExMo.Schema.FromAxis.to_object(spec)
   """
 
-  alias ExMo.Schema.{Object, Property}
+  alias ExMo.Schema.{Method, Object, Property}
 
   @type axis_type :: :linear | :rotary
 
@@ -150,6 +150,7 @@ defmodule ExMo.Schema.FromAxis do
         standard_properties(id, type, spec) ++
           interface_properties(id, interface(spec)) ++
           type_properties(id, type, spec) ++
+          methods(id, interface(spec)) ++
           (spec[:extra] || [])
     }
   end
@@ -313,8 +314,9 @@ defmodule ExMo.Schema.FromAxis do
   end
 
   defp type_properties(prefix, :linear, spec) do
-    # Whether an axis is home is only knowable where something can sense it.
-    if feedback?(interface(spec)) do
+    # A home switch, not an encoder, is what makes this knowable — so a stepper
+    # has it and a PWM servo does not.
+    if homing?(interface(spec)) do
       [
         %Property{
           id: "#{prefix}.at_home",
@@ -329,6 +331,70 @@ defmodule ExMo.Schema.FromAxis do
     else
       []
     end
+  end
+
+  # ── Commands ──────────────────────────────────────────────────────────────
+
+  # What an axis can be *told*, by interface. Presence is the capability: a PWM
+  # servo has no reset_fault because it cannot report a fault, and a client
+  # browsing the axis simply does not find one to offer.
+  #
+  # All of these are async. A CiA 402 enable is three control words through a
+  # state machine that may refuse them, homing takes as long as it takes, and a
+  # call that blocked until the drive agreed would be lying about a machine that
+  # has not finished. The answer arrives on `state`, which is subscribable, and
+  # watching the state machine move is what an operator does anyway.
+  defp methods(prefix, interface) do
+    common = [
+      command(prefix, "enable", "Enable",
+        "Energise the axis and make it accept motion", :enable_drives),
+      command(prefix, "disable", "Disable",
+        "Remove drive power. Motion stops; position may drift under load", :enable_drives),
+      command(prefix, "stop", "Stop",
+        "Decelerate to a halt and hold. Not a substitute for an emergency stop, " <>
+          "which is a hardware circuit and does not come through this protocol",
+        :enable_drives)
+    ]
+
+    common ++ fault_methods(prefix, interface) ++ homing_methods(prefix, interface)
+  end
+
+  # Only where faults can be reported in the first place.
+  defp fault_methods(prefix, :cia402) do
+    [
+      command(prefix, "reset_fault", "ResetFault",
+        "Clear a latched fault and return the axis to disabled. Does nothing " <>
+          "about whatever caused it", :enable_drives)
+    ]
+  end
+
+  defp fault_methods(_prefix, _interface), do: []
+
+  # Homing needs a home sensor, which is not the same thing as feedback — and
+  # getting that wrong excluded the interface that needs homing most. An
+  # open-loop stepper has no absolute reference at all, so homing against a
+  # switch is the only way it ever knows where it is. A PWM servo cannot home
+  # because nothing on it can sense anything.
+  defp homing_methods(prefix, interface) do
+    if homing?(interface) do
+      [
+        command(prefix, "home", "Home",
+          "Run the homing routine. The axis is in state `homing` until it " <>
+            "finishes", :enable_drives)
+      ]
+    else
+      []
+    end
+  end
+
+  defp command(prefix, id, name, description, grant) do
+    %Method{
+      id: "#{prefix}.#{id}",
+      name: name,
+      description: description,
+      async: true,
+      call_grant: grant
+    }
   end
 
   # ── Interface ─────────────────────────────────────────────────────────────
@@ -363,6 +429,17 @@ defmodule ExMo.Schema.FromAxis do
   @spec feedback?(interface()) :: boolean()
   def feedback?(:cia402), do: true
   def feedback?(_interface), do: false
+
+  @doc """
+  Whether this interface can find a home position.
+
+  Deliberately not the same predicate as `feedback?/1`. A stepper cannot
+  measure where it is, and precisely because of that it must home against a
+  switch before its counts mean anything. A PWM servo can do neither.
+  """
+  @spec homing?(interface()) :: boolean()
+  def homing?(:pwm), do: false
+  def homing?(_interface), do: true
 
   # ── Helpers ───────────────────────────────────────────────────────────────
 

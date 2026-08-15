@@ -51,16 +51,19 @@ defmodule ExMo.Projection.JSONRPC do
   def project(%Model{root: root, types: types}) do
     entries = walk(root, nil, types)
 
-    case {duplicate_ids(entries), ungranted_writes(entries)} do
-      {[], []} ->
+    case {duplicate_ids(entries), ungranted_writes(entries), ungranted_calls(entries)} do
+      {[], [], []} ->
         nodes = Map.new(entries, fn entry -> {entry.node_id, entry} end)
         {:ok, %{root: node_id(root), nodes: nodes}}
 
-      {[_ | _] = dups, _} ->
+      {[_ | _] = dups, _, _} ->
         {:error, {:duplicate_node_ids, dups}}
 
-      {[], [_ | _] = ungranted} ->
+      {[], [_ | _] = ungranted, _} ->
         {:error, {:writable_without_grant, ungranted}}
+
+      {[], [], [_ | _] = ungranted} ->
+        {:error, {:callable_without_grant, ungranted}}
     end
   rescue
     e -> {:error, e}
@@ -91,6 +94,17 @@ defmodule ExMo.Projection.JSONRPC do
   defp ungranted_writes(entries) do
     entries
     |> Elixir.Enum.filter(&(&1.class == :property and &1.writable and is_nil(&1.write_grant)))
+    |> Elixir.Enum.map(& &1.node_id)
+    |> Elixir.Enum.sort()
+  end
+
+  # A method that names no grant is a command nobody decided who may run. Same
+  # rule and same reasoning as a writable property with no write grant — see
+  # ungranted_writes/1 — and it matters more here, because the thing behind a
+  # method is an action rather than a value.
+  defp ungranted_calls(entries) do
+    entries
+    |> Elixir.Enum.filter(&(&1.class == :method and is_nil(&1.call_grant)))
     |> Elixir.Enum.map(& &1.node_id)
     |> Elixir.Enum.sort()
   end
@@ -186,6 +200,8 @@ defmodule ExMo.Projection.JSONRPC do
         parent: parent,
         children: [],
         async: meth.async,
+        # The authorisation the enforcement point checks, same as a property's.
+        call_grant: meth.call_grant,
         params: Enum.map(meth.input_args, &argument(&1, types)),
         result: Enum.map(meth.output_args, &result_field(&1, types)),
         meta: meth.meta || %{}
