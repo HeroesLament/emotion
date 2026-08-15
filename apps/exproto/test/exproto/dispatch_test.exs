@@ -1,0 +1,508 @@
+defmodule ExProto.DispatchTest do
+  @moduledoc """
+  The protocol, exercised end to end with no socket.
+
+  Every test below builds a session, hands it a decoded request, and inspects
+  what comes back. That is the whole point of keeping dispatch pure: the
+  protocol is fully covered before a transport exists, and when one arrives it
+  has nothing to get wrong except moving bytes.
+  """
+
+  use ExUnit.Case, async: true
+
+  alias ExMo.InformationModel
+  alias ExMo.Projection.JSONRPC
+  alias ExMo.Projection.JSONRPC.OpenRPC
+  alias ExProto.{Dispatch, Nodes, Session}
+  alias ExProto.Source.Static
+
+  setup do
+    {:ok, model} = InformationModel.compiled_model()
+    {:ok, table} = JSONRPC.project(model)
+
+    {:ok, source} =
+      Static.start_link(
+        values: %{
+          "axes.j1.position" => 0.5,
+          "axes.j1.target_position" => 0.0,
+          "axes.j1.velocity" => 0.0,
+          "axes.j1.drive_state" => "operation_enabled",
+          "axes.j1.fault_code" => 0,
+          "axes.j2.position" => -1.25,
+          "axes.j2.target_position" => 0.0
+        },
+        clamp: %{"axes.j1.target_position" => {-3.05, 3.05}},
+        reject: ["axes.j2.target_position"]
+      )
+
+    session = Session.new(table: table, source: {Static, source})
+    {:ok, session: session, source: source, table: table}
+  end
+
+  # ── helpers ───────────────────────────────────────────────────────────────
+
+  defp call(session, method, params \\ %{}, id \\ 1) do
+    request = %{"jsonrpc" => "2.0", "method" => method, "params" => params, "id" => id}
+    Dispatch.handle(request, session)
+  end
+
+  defp notify(session, method, params \\ %{}) do
+    Dispatch.handle(%{"jsonrpc" => "2.0", "method" => method, "params" => params}, session)
+  end
+
+  defp ready(session) do
+    {:reply, _, session} =
+      call(session, "initialize", %{
+        "protocolVersion" => OpenRPC.protocol_version(),
+        "clientInfo" => %{"name" => "test", "version" => "0"}
+      })
+
+    session
+  end
+
+  defp result({:reply, %{"result" => result}, _session}), do: result
+  defp error({:reply, %{"error" => error}, _session}), do: error
+
+  # ── envelope ──────────────────────────────────────────────────────────────
+
+  describe "JSON-RPC 2.0 envelope" do
+    test "a response echoes the request id", %{session: session} do
+      assert {:reply, %{"jsonrpc" => "2.0", "id" => 42}, _} =
+               call(ready(session), "nodes/browse", %{}, 42)
+    end
+
+    test "string ids work as well as integers", %{session: session} do
+      assert {:reply, %{"id" => "abc"}, _} = call(ready(session), "nodes/browse", %{}, "abc")
+    end
+
+    test "a notification gets no response at all", %{session: session} do
+      assert {:noreply, _session} = notify(ready(session), "nodes/browse")
+    end
+
+    test "a notification that fails still gets no response", %{session: session} do
+      # The one implementations most often get wrong. Returning an error to a
+      # message with no id hands the client something it cannot correlate and
+      # may mistake for a reply to a different call.
+      assert {:noreply, _session} = notify(session, "no/such/method")
+    end
+
+    test "an unknown method is -32601", %{session: session} do
+      assert %{"code" => -32_601} = error(call(ready(session), "totally/made/up"))
+    end
+
+    test "non-object params are -32602", %{session: session} do
+      request = %{"jsonrpc" => "2.0", "method" => "nodes/browse", "params" => [1, 2], "id" => 1}
+      assert {:reply, %{"error" => %{"code" => -32_602}}, _} = Dispatch.handle(request, session)
+    end
+
+    test "a request that is not a request is -32600", %{session: session} do
+      assert {:reply, %{"error" => %{"code" => -32_600}}, _} =
+               Dispatch.handle(%{"nope" => true}, session)
+    end
+
+    test "malformed JSON is -32700 with a null id", %{session: session} do
+      assert {:reply, %{"id" => nil, "error" => %{"code" => -32_700}}, _} =
+               Dispatch.handle_payload("{not json", session)
+    end
+
+    test "trailing garbage after valid JSON is still a parse error", %{session: session} do
+      assert {:reply, %{"error" => %{"code" => -32_700}}, _} =
+               Dispatch.handle_payload(~s({"jsonrpc":"2.0","method":"x","id":1} trailing), session)
+    end
+  end
+
+  describe "batches" do
+    test "a batch returns one response per request", %{session: session} do
+      session = ready(session)
+
+      batch = [
+        %{"jsonrpc" => "2.0", "method" => "nodes/browse", "params" => %{}, "id" => 1},
+        %{"jsonrpc" => "2.0", "method" => "nodes/browse", "params" => %{}, "id" => 2}
+      ]
+
+      assert {:reply, [%{"id" => 1}, %{"id" => 2}], _} = Dispatch.handle(batch, session)
+    end
+
+    test "notifications inside a batch produce no entries", %{session: session} do
+      session = ready(session)
+
+      batch = [
+        %{"jsonrpc" => "2.0", "method" => "nodes/browse", "params" => %{}},
+        %{"jsonrpc" => "2.0", "method" => "nodes/browse", "params" => %{}, "id" => 7}
+      ]
+
+      assert {:reply, [%{"id" => 7}], _} = Dispatch.handle(batch, session)
+    end
+
+    test "a batch of only notifications returns nothing, not an empty array", %{session: session} do
+      session = ready(session)
+      batch = [%{"jsonrpc" => "2.0", "method" => "nodes/browse", "params" => %{}}]
+
+      assert {:noreply, _} = Dispatch.handle(batch, session)
+    end
+
+    test "an empty batch is a single invalid-request error", %{session: session} do
+      assert {:reply, %{"error" => %{"code" => -32_600}}, _} = Dispatch.handle([], session)
+    end
+
+    test "state carries across a batch", %{session: session} do
+      # initialize then browse, in one batch. The second must see the first.
+      batch = [
+        %{
+          "jsonrpc" => "2.0",
+          "method" => "initialize",
+          "params" => %{"protocolVersion" => OpenRPC.protocol_version()},
+          "id" => 1
+        },
+        %{"jsonrpc" => "2.0", "method" => "nodes/browse", "params" => %{}, "id" => 2}
+      ]
+
+      assert {:reply, [%{"result" => _}, %{"result" => _}], _} = Dispatch.handle(batch, session)
+    end
+  end
+
+  # ── handshake ─────────────────────────────────────────────────────────────
+
+  describe "initialize" do
+    test "accepts the version this build speaks", %{session: session} do
+      result =
+        result(
+          call(session, "initialize", %{"protocolVersion" => OpenRPC.protocol_version()})
+        )
+
+      assert result["protocolVersion"] == OpenRPC.protocol_version()
+      assert result["capabilities"]["nodes"]["count"] > 0
+    end
+
+    test "refuses an unknown version and says what it does speak", %{session: session} do
+      error = error(call(session, "initialize", %{"protocolVersion" => "1999-01-01"}))
+
+      assert error["code"] == -32_002
+      # Actionable: an operator can be told to update something specific.
+      assert error["data"]["supported"] == [OpenRPC.protocol_version()]
+    end
+
+    test "reports the time base so a client knows not to overlay timestamps",
+         %{session: session} do
+      result = result(call(session, "initialize", %{"protocolVersion" => OpenRPC.protocol_version()}))
+
+      assert result["capabilities"]["timeBase"] == "local"
+    end
+
+    test "initializing twice is an error", %{session: session} do
+      session = ready(session)
+
+      assert %{"code" => -32_001} =
+               error(call(session, "initialize", %{"protocolVersion" => OpenRPC.protocol_version()}))
+    end
+
+    test "every other method is refused before initialize", %{session: session} do
+      for method <- ~w(nodes/browse nodes/read nodes/write nodes/subscribe nodes/unsubscribe) do
+        assert %{"code" => -32_000} = error(call(session, method, %{})),
+               "#{method} should require initialization"
+      end
+    end
+  end
+
+  # ── browse ────────────────────────────────────────────────────────────────
+
+  describe "browse" do
+    test "with no nodeId browses from the root", %{session: session} do
+      result = result(call(ready(session), "nodes/browse"))
+
+      assert result["node"]["nodeId"] == "exmo"
+      assert Enum.any?(result["children"], &(&1["nodeId"] == "axes"))
+    end
+
+    test "returns direct children only", %{session: session} do
+      result = result(call(ready(session), "nodes/browse", %{"nodeId" => "axes"}))
+      ids = Enum.map(result["children"], & &1["nodeId"])
+
+      assert "axes.j1" in ids
+      # A grandchild would mean the whole model arrives on every browse.
+      refute "axes.j1.position" in ids
+    end
+
+    test "a property descriptor carries its schema and access flags", %{session: session} do
+      result = result(call(ready(session), "nodes/browse", %{"nodeId" => "axes.j1"}))
+      position = Enum.find(result["children"], &(&1["name"] == "Position"))
+
+      assert position["schema"]["type"] == "number"
+      assert position["readable"]
+      assert position["observable"]
+      refute position["writable"]
+    end
+
+    test "descriptors state the SI unit and the display hint separately",
+         %{session: session} do
+      result = result(call(ready(session), "nodes/browse", %{"nodeId" => "axes.j1"}))
+      position = Enum.find(result["children"], &(&1["name"] == "Position"))
+
+      assert position["unit"] == "rad"
+      assert position["displayUnit"] == "degrees"
+    end
+
+    test "an unknown node is -32003", %{session: session} do
+      assert %{"code" => -32_003} =
+               error(call(ready(session), "nodes/browse", %{"nodeId" => "axes.j99"}))
+    end
+  end
+
+  # ── read ──────────────────────────────────────────────────────────────────
+
+  describe "read" do
+    test "returns values in request order", %{session: session} do
+      result =
+        result(
+          call(ready(session), "nodes/read", %{
+            "nodeIds" => ["axes.j2.position", "axes.j1.position"]
+          })
+        )
+
+      assert [%{"nodeId" => "axes.j2.position", "value" => -1.25}, %{"value" => 0.5}] =
+               result["values"]
+    end
+
+    test "one bad node does not fail the batch", %{session: session} do
+      # A pendant should show five live values and one greyed cell, not nothing.
+      result =
+        result(
+          call(ready(session), "nodes/read", %{
+            "nodeIds" => ["axes.j1.position", "axes.nope", "axes.j2.position"]
+          })
+        )
+
+      assert [good, bad, also_good] = result["values"]
+      assert good["value"] == 0.5
+      assert bad["error"]["code"] == -32_003
+      assert also_good["value"] == -1.25
+    end
+
+    test "results are always the same length as the request", %{session: session} do
+      ids = ["axes.j1.position", "axes.nope", "axes.j1", "axes.j1.velocity"]
+      result = result(call(ready(session), "nodes/read", %{"nodeIds" => ids}))
+
+      assert length(result["values"]) == length(ids)
+    end
+
+    test "reading an object rather than a property is not readable", %{session: session} do
+      result = result(call(ready(session), "nodes/read", %{"nodeIds" => ["axes.j1"]}))
+
+      assert [%{"error" => %{"code" => -32_004}}] = result["values"]
+    end
+
+    test "values carry a timestamp", %{session: session} do
+      result = result(call(ready(session), "nodes/read", %{"nodeIds" => ["axes.j1.position"]}))
+
+      assert {:ok, _dt, _} = DateTime.from_iso8601(hd(result["values"])["timestamp"])
+    end
+
+    test "a missing nodeIds is invalid params", %{session: session} do
+      assert %{"code" => -32_602} = error(call(ready(session), "nodes/read", %{}))
+    end
+  end
+
+  # ── write ─────────────────────────────────────────────────────────────────
+
+  describe "write" do
+    test "writes a value and reads it back", %{session: session} do
+      session = ready(session)
+
+      call(session, "nodes/write", %{
+        "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => 1.5}]
+      })
+
+      result = result(call(session, "nodes/read", %{"nodeIds" => ["axes.j1.target_position"]}))
+      assert hd(result["values"])["value"] == 1.5
+    end
+
+    test "reports the applied value, not the requested one", %{session: session} do
+      # The source clamps to the joint limit. A client told what it asked for
+      # would draw the arm somewhere it is not.
+      result =
+        result(
+          call(ready(session), "nodes/write", %{
+            "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => 99.0}]
+          })
+        )
+
+      assert [%{"ok" => true, "value" => 3.05}] = result["results"]
+    end
+
+    test "a read-only node is -32005", %{session: session} do
+      result =
+        result(
+          call(ready(session), "nodes/write", %{
+            "writes" => [%{"nodeId" => "axes.j1.position", "value" => 1.0}]
+          })
+        )
+
+      assert [%{"ok" => false, "error" => %{"code" => -32_005}}] = result["results"]
+    end
+
+    test "a value that fails the node's schema is -32007", %{session: session} do
+      result =
+        result(
+          call(ready(session), "nodes/write", %{
+            "writes" => [%{"nodeId" => "axes.j1.target_position", "value" => "sideways"}]
+          })
+        )
+
+      assert [%{"ok" => false, "error" => %{"code" => -32_007, "message" => message}}] =
+               result["results"]
+
+      # Actionable rather than merely "invalid".
+      assert message =~ "expected number"
+    end
+
+    test "a refused write is -32010", %{session: session} do
+      result =
+        result(
+          call(ready(session), "nodes/write", %{
+            "writes" => [%{"nodeId" => "axes.j2.target_position", "value" => 0.5}]
+          })
+        )
+
+      assert [%{"ok" => false, "error" => %{"code" => -32_010}}] = result["results"]
+    end
+
+    test "a batch half-succeeds and says which half", %{session: session} do
+      # Explicitly not atomic. Rolling back a value that already reached a
+      # drive is not something this layer can honestly offer.
+      result =
+        result(
+          call(ready(session), "nodes/write", %{
+            "writes" => [
+              %{"nodeId" => "axes.j1.target_position", "value" => 1.0},
+              %{"nodeId" => "axes.j2.target_position", "value" => 1.0}
+            ]
+          })
+        )
+
+      assert [%{"ok" => true}, %{"ok" => false}] = result["results"]
+
+      # And the first write really did land.
+      read = result(call(ready(session), "nodes/read", %{"nodeIds" => ["axes.j1.target_position"]}))
+      assert hd(read["values"])["value"] == 1.0
+    end
+
+    test "an unknown node is -32003", %{session: session} do
+      result =
+        result(
+          call(ready(session), "nodes/write", %{
+            "writes" => [%{"nodeId" => "nope", "value" => 1}]
+          })
+        )
+
+      assert [%{"error" => %{"code" => -32_003}}] = result["results"]
+    end
+  end
+
+  # ── subscribe ─────────────────────────────────────────────────────────────
+
+  describe "subscribe" do
+    test "returns an id and the granted rate", %{session: session} do
+      result =
+        result(
+          call(ready(session), "nodes/subscribe", %{
+            "nodeIds" => ["axes.j1.position"],
+            "rateHz" => 30
+          })
+        )
+
+      assert result["subscriptionId"] =~ ~r/^sub_/
+      assert result["rateHz"] == 30.0
+    end
+
+    test "the granted rate is capped, not echoed", %{session: session} do
+      result =
+        result(
+          call(ready(session), "nodes/subscribe", %{
+            "nodeIds" => ["axes.j1.position"],
+            "rateHz" => 5000
+          })
+        )
+
+      assert result["rateHz"] == 1000.0
+    end
+
+    test "a non-observable node is refused rather than silently never sent",
+         %{session: session} do
+      # A subscription that produces nothing is indistinguishable from a
+      # broken controller.
+      assert %{"code" => -32_006} =
+               error(
+                 call(ready(session), "nodes/subscribe", %{
+                   "nodeIds" => ["axes.j1.target_position"]
+                 })
+               )
+    end
+
+    test "an unknown node is refused", %{session: session} do
+      assert %{"code" => -32_003} =
+               error(call(ready(session), "nodes/subscribe", %{"nodeIds" => ["nope"]}))
+    end
+
+    test "the subscription limit is enforced", %{session: session} do
+      session =
+        Enum.reduce(1..Session.max_subscriptions(), ready(session), fn _, session ->
+          {:reply, _, session} =
+            call(session, "nodes/subscribe", %{"nodeIds" => ["axes.j1.position"]})
+
+          session
+        end)
+
+      assert %{"code" => -32_008} =
+               error(call(session, "nodes/subscribe", %{"nodeIds" => ["axes.j1.position"]}))
+    end
+
+    test "unsubscribe is idempotent", %{session: session} do
+      session = ready(session)
+
+      # Never existed.
+      assert %{} = result(call(session, "nodes/unsubscribe", %{"subscriptionId" => "sub_999"}))
+
+      {:reply, %{"result" => %{"subscriptionId" => id}}, session} =
+        call(session, "nodes/subscribe", %{"nodeIds" => ["axes.j1.position"]})
+
+      {:reply, _, session} = call(session, "nodes/unsubscribe", %{"subscriptionId" => id})
+      # And again.
+      assert %{} = result(call(session, "nodes/unsubscribe", %{"subscriptionId" => id}))
+      assert session.subscriptions == %{}
+    end
+  end
+
+  # ── the codes match the published document ────────────────────────────────
+
+  describe "error codes match the generated document" do
+    test "every code the implementation uses is declared in the OpenRPC document" do
+      # The document is the contract. An implementation returning a code the
+      # document does not publish is one a client cannot handle.
+      {:ok, model} = InformationModel.compiled_model()
+      {:ok, doc} = OpenRPC.document(model)
+
+      declared =
+        doc["components"]["errors"]
+        |> Map.values()
+        |> Enum.map(& &1["code"])
+        |> MapSet.new()
+
+      for {name, code} <- Nodes.error_codes() do
+        assert MapSet.member?(declared, code),
+               "#{name} uses #{code}, which the OpenRPC document does not declare"
+      end
+    end
+
+    test "every declared code is one the implementation can produce" do
+      {:ok, model} = InformationModel.compiled_model()
+      {:ok, doc} = OpenRPC.document(model)
+
+      used = Nodes.error_codes() |> Map.values() |> MapSet.new()
+
+      for {name, %{"code" => code}} <- doc["components"]["errors"] do
+        assert MapSet.member?(used, code),
+               "#{name} (#{code}) is declared but the implementation never returns it"
+      end
+    end
+  end
+end
