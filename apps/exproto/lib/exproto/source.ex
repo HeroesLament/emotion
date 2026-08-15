@@ -87,7 +87,7 @@ defmodule ExProto.Source do
   """
   @spec call(module(), node_id(), map(), term()) :: :ok | {:error, reason()}
   def call(module, node_id, args, arg) do
-    if function_exported?(module, :call, 3) do
+    if exports?(module, :call, 3) do
       module.call(node_id, args, arg)
     else
       {:error, :not_callable}
@@ -100,10 +100,24 @@ defmodule ExProto.Source do
   @spec read_many(module(), [node_id()], term()) ::
           [{node_id(), {:ok, value()} | {:error, reason()}}]
   def read_many(module, node_ids, arg) do
-    if function_exported?(module, :read_many, 2) do
+    if exports?(module, :read_many, 2) do
       module.read_many(node_ids, arg)
     else
       Enum.map(node_ids, fn id -> {id, module.read(id, arg)} end)
     end
+  end
+
+  # `function_exported?/3` answers for modules that are *loaded*, and the BEAM
+  # loads lazily: a source module nobody has called yet is on disk and not in
+  # memory, so asking about it returns false and the optional callback it does
+  # implement looks absent.
+  #
+  # This is not theoretical. It cost a controller its first jog: the axis was
+  # enabled, the model declared the command, the source implemented it, and the
+  # first client to call one before reading anything was told the controller had
+  # no command bound to that node. Reading a value first "fixed" it, which is
+  # the shape of bug that gets diagnosed as a network fault.
+  defp exports?(module, function, arity) do
+    Code.ensure_loaded?(module) and function_exported?(module, function, arity)
   end
 end
