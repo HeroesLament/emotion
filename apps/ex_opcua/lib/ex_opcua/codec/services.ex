@@ -37,8 +37,8 @@ defmodule ExOpcUA.Codec.Services do
   import ExOpcUA.Codec.Types
 
   alias ExOpcUA.Codec.Types.{
-    NodeId, QualifiedName, LocalizedText, Variant, DataValue,
-    ExtensionObject, DiagnosticInfo, RequestHeader, ResponseHeader
+    NodeId, QualifiedName, LocalizedText, DataValue,
+    ExtensionObject, RequestHeader, ResponseHeader
   }
 
   # ── TypeId mapping (ns=0 binary encoding ids) ────────────────────────────────
@@ -299,68 +299,6 @@ defmodule ExOpcUA.Codec.Services do
       }, r4}
     end
   end
-
-  defp do_encode(:open_secure_channel_req, %OpenSecureChannelRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_uint32(r.client_protocol_version) <>
-    encode_uint32(r.request_type) <>
-    encode_uint32(r.security_mode) <>
-    encode_byte_string(r.client_nonce) <>
-    encode_uint32(r.requested_lifetime)
-  end
-
-  defp do_decode(:open_secure_channel_req, data) do
-    with {hdr,   r1} <- decode_request_header(data),
-         {cpv,   r2} <- decode_uint32(r1),
-         {rtype, r3} <- decode_uint32(r2),
-         {smode, r4} <- decode_uint32(r3),
-         {nonce, r5} <- decode_byte_string(r4),
-         {life,  r6} <- decode_uint32(r5) do
-      {:ok, %OpenSecureChannelRequest{
-        request_header: hdr, client_protocol_version: cpv,
-        request_type: rtype, security_mode: smode,
-        client_nonce: nonce, requested_lifetime: life
-      }, r6}
-    end
-  end
-
-  defp do_encode(:open_secure_channel_res, %OpenSecureChannelResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_uint32(r.server_protocol_version) <>
-    encode_channel_security_token(r.security_token || %ChannelSecurityToken{}) <>
-    encode_byte_string(r.server_nonce)
-  end
-
-  defp do_decode(:open_secure_channel_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {spv,   r2} <- decode_uint32(r1),
-         {token, r3} <- decode_channel_security_token(r2),
-         {nonce, r4} <- decode_byte_string(r3) do
-      {:ok, %OpenSecureChannelResponse{
-        response_header: hdr, server_protocol_version: spv,
-        security_token: token, server_nonce: nonce
-      }, r4}
-    end
-  end
-
-  defp do_encode(:close_secure_channel_req, %{request_header: hdr}) do
-    encode_request_header(hdr || %RequestHeader{})
-  end
-  defp do_decode(:close_secure_channel_req, data) do
-    with {hdr, rest} <- decode_request_header(data) do
-      {:ok, %{request_header: hdr}, rest}
-    end
-  end
-
-  defp do_encode(:close_secure_channel_res, %{response_header: hdr}) do
-    encode_response_header(hdr || %ResponseHeader{})
-  end
-  defp do_decode(:close_secure_channel_res, data) do
-    with {hdr, rest} <- decode_response_header(data) do
-      {:ok, %{response_header: hdr}, rest}
-    end
-  end
-
   # ── GetEndpoints ──────────────────────────────────────────────────────────────
 
   defmodule GetEndpointsRequest do
@@ -370,38 +308,6 @@ defmodule ExOpcUA.Codec.Services do
   defmodule GetEndpointsResponse do
     defstruct [response_header: nil, endpoints: []]
   end
-
-  defp do_encode(:get_endpoints_req, %GetEndpointsRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_string(r.endpoint_url) <>
-    encode_array(r.locale_ids || [], &encode_string/1) <>
-    encode_array(r.profile_uris || [], &encode_string/1)
-  end
-
-  defp do_decode(:get_endpoints_req, data) do
-    with {hdr,     r1} <- decode_request_header(data),
-         {ep_url,  r2} <- decode_string(r1),
-         {locales, r3} <- decode_array(r2, &decode_string/1),
-         {profiles,r4} <- decode_array(r3, &decode_string/1) do
-      {:ok, %GetEndpointsRequest{
-        request_header: hdr, endpoint_url: ep_url,
-        locale_ids: locales || [], profile_uris: profiles || []
-      }, r4}
-    end
-  end
-
-  defp do_encode(:get_endpoints_res, %GetEndpointsResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_array(r.endpoints || [], &encode_endpoint_desc/1)
-  end
-
-  defp do_decode(:get_endpoints_res, data) do
-    with {hdr, r1} <- decode_response_header(data),
-         {eps, r2} <- decode_array(r1, &decode_endpoint_desc/1) do
-      {:ok, %GetEndpointsResponse{response_header: hdr, endpoints: eps || []}, r2}
-    end
-  end
-
   # ── FindServers ───────────────────────────────────────────────────────────────
 
   defmodule FindServersRequest do
@@ -411,38 +317,6 @@ defmodule ExOpcUA.Codec.Services do
   defmodule FindServersResponse do
     defstruct [response_header: nil, servers: []]
   end
-
-  defp do_encode(:find_servers_req, %FindServersRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_string(r.endpoint_url) <>
-    encode_array(r.locale_ids || [], &encode_string/1) <>
-    encode_array(r.server_uris || [], &encode_string/1)
-  end
-
-  defp do_decode(:find_servers_req, data) do
-    with {hdr,      r1} <- decode_request_header(data),
-         {ep_url,   r2} <- decode_string(r1),
-         {locales,  r3} <- decode_array(r2, &decode_string/1),
-         {srv_uris, r4} <- decode_array(r3, &decode_string/1) do
-      {:ok, %FindServersRequest{
-        request_header: hdr, endpoint_url: ep_url,
-        locale_ids: locales || [], server_uris: srv_uris || []
-      }, r4}
-    end
-  end
-
-  defp do_encode(:find_servers_res, %FindServersResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_array(r.servers || [], &encode_app_desc/1)
-  end
-
-  defp do_decode(:find_servers_res, data) do
-    with {hdr,  r1} <- decode_response_header(data),
-         {srvs, r2} <- decode_array(r1, &decode_app_desc/1) do
-      {:ok, %FindServersResponse{response_header: hdr, servers: srvs || []}, r2}
-    end
-  end
-
   # ── CreateSession ─────────────────────────────────────────────────────────────
 
   defmodule CreateSessionRequest do
@@ -473,73 +347,6 @@ defmodule ExOpcUA.Codec.Services do
       max_request_message_size:  0
     ]
   end
-
-  defp do_encode(:create_session_req, %CreateSessionRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_app_desc(r.client_description || %ApplicationDescription{}) <>
-    encode_string(r.server_uri) <>
-    encode_string(r.endpoint_url) <>
-    encode_string(r.session_name) <>
-    encode_byte_string(r.client_nonce) <>
-    encode_byte_string(r.client_certificate) <>
-    encode_double(r.requested_session_timeout) <>
-    encode_uint32(r.max_response_message_size)
-  end
-
-  defp do_decode(:create_session_req, data) do
-    with {hdr,     r1} <- decode_request_header(data),
-         {cli_desc,r2} <- decode_app_desc(r1),
-         {srv_uri, r3} <- decode_string(r2),
-         {ep_url,  r4} <- decode_string(r3),
-         {ses_name,r5} <- decode_string(r4),
-         {nonce,   r6} <- decode_byte_string(r5),
-         {cert,    r7} <- decode_byte_string(r6),
-         {timeout, r8} <- decode_double(r7),
-         {max_msg, r9} <- decode_uint32(r8) do
-      {:ok, %CreateSessionRequest{
-        request_header: hdr, client_description: cli_desc,
-        server_uri: srv_uri, endpoint_url: ep_url,
-        session_name: ses_name, client_nonce: nonce,
-        client_certificate: cert, requested_session_timeout: timeout,
-        max_response_message_size: max_msg
-      }, r9}
-    end
-  end
-
-  defp do_encode(:create_session_res, %CreateSessionResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_node_id(r.session_id || NodeId.ns0(0)) <>
-    encode_node_id(r.authentication_token || NodeId.ns0(0)) <>
-    encode_double(r.revised_session_timeout) <>
-    encode_byte_string(r.server_nonce) <>
-    encode_byte_string(r.server_certificate) <>
-    encode_array(r.server_endpoints || [], &encode_endpoint_desc/1) <>
-    encode_array([], fn x -> x end) <>   # server_software_certificates (deprecated, empty array)
-    encode_signature(r.server_signature || %SignatureData{}) <>
-    encode_uint32(r.max_request_message_size)
-  end
-
-  defp do_decode(:create_session_res, data) do
-    with {hdr,     r1}  <- decode_response_header(data),
-         {ses_id,  r2}  <- decode_node_id(r1),
-         {auth_tok,r3}  <- decode_node_id(r2),
-         {timeout, r4}  <- decode_double(r3),
-         {nonce,   r5}  <- decode_byte_string(r4),
-         {cert,    r6}  <- decode_byte_string(r5),
-         {eps,     r7}  <- decode_array(r6, &decode_endpoint_desc/1),
-         {_certs,  r8}  <- decode_array(r7, &decode_extension_object/1),
-         {sig,     r9}  <- decode_signature(r8),
-         {max_msg, r10} <- decode_uint32(r9) do
-      {:ok, %CreateSessionResponse{
-        response_header: hdr, session_id: ses_id,
-        authentication_token: auth_tok, revised_session_timeout: timeout,
-        server_nonce: nonce, server_certificate: cert,
-        server_endpoints: eps || [], server_signature: sig,
-        max_request_message_size: max_msg
-      }, r10}
-    end
-  end
-
   # ── ActivateSession ───────────────────────────────────────────────────────────
 
   defmodule ActivateSessionRequest do
@@ -561,72 +368,6 @@ defmodule ExOpcUA.Codec.Services do
       diagnostic_infos: []
     ]
   end
-
-  defp do_encode(:activate_session_req, %ActivateSessionRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_signature(r.client_signature || %SignatureData{}) <>
-    encode_array([], fn x -> x end) <>   # client_software_certificates (deprecated)
-    encode_array(r.locale_ids || [], &encode_string/1) <>
-    encode_extension_object(r.user_identity_token || anonymous_identity_token()) <>
-    encode_signature(r.user_token_signature || %SignatureData{})
-  end
-
-  defp do_decode(:activate_session_req, data) do
-    with {hdr,    r1} <- decode_request_header(data),
-         {sig,    r2} <- decode_signature(r1),
-         {_certs, r3} <- decode_array(r2, &decode_extension_object/1),
-         {locs,   r4} <- decode_array(r3, &decode_string/1),
-         {token,  r5} <- decode_extension_object(r4),
-         {tok_sig,r6} <- decode_signature(r5) do
-      {:ok, %ActivateSessionRequest{
-        request_header: hdr, client_signature: sig,
-        locale_ids: locs || [], user_identity_token: token,
-        user_token_signature: tok_sig
-      }, r6}
-    end
-  end
-
-  defp do_encode(:activate_session_res, %ActivateSessionResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_byte_string(r.server_nonce) <>
-    encode_array(r.results || [], &encode_status_code/1) <>
-    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
-  end
-
-  defp do_decode(:activate_session_res, data) do
-    with {hdr,    r1} <- decode_response_header(data),
-         {nonce,  r2} <- decode_byte_string(r1),
-         {res,    r3} <- decode_array(r2, &decode_status_code/1),
-         {diags,  r4} <- decode_array(r3, &decode_diagnostic_info/1) do
-      {:ok, %ActivateSessionResponse{
-        response_header: hdr, server_nonce: nonce,
-        results: res || [], diagnostic_infos: diags || []
-      }, r4}
-    end
-  end
-
-  # ── CloseSession ──────────────────────────────────────────────────────────────
-
-  defp do_encode(:close_session_req, %{request_header: hdr, delete_subscriptions: del}) do
-    encode_request_header(hdr || %RequestHeader{}) <>
-    encode_boolean(del != false)
-  end
-  defp do_decode(:close_session_req, data) do
-    with {hdr, r1} <- decode_request_header(data),
-         {del, r2} <- decode_boolean(r1) do
-      {:ok, %{request_header: hdr, delete_subscriptions: del}, r2}
-    end
-  end
-
-  defp do_encode(:close_session_res, %{response_header: hdr}) do
-    encode_response_header(hdr || %ResponseHeader{})
-  end
-  defp do_decode(:close_session_res, data) do
-    with {hdr, rest} <- decode_response_header(data) do
-      {:ok, %{response_header: hdr}, rest}
-    end
-  end
-
   # ── Browse ────────────────────────────────────────────────────────────────────
 
   defmodule ViewDescription do
@@ -743,69 +484,6 @@ defmodule ExOpcUA.Codec.Services do
       {%BrowseResult{status_code: sc, continuation_point: cp, references: refs || []}, r3}
     end
   end
-
-  defp do_encode(:browse_req, %BrowseRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_view_desc(r.view || %ViewDescription{}) <>
-    encode_uint32(r.max_references_per_node) <>
-    encode_array(r.nodes_to_browse || [], &encode_browse_desc/1)
-  end
-
-  defp do_decode(:browse_req, data) do
-    with {hdr,   r1} <- decode_request_header(data),
-         {view,  r2} <- decode_view_desc(r1),
-         {maxr,  r3} <- decode_uint32(r2),
-         {nodes, r4} <- decode_array(r3, &decode_browse_desc/1) do
-      {:ok, %BrowseRequest{
-        request_header: hdr, view: view,
-        max_references_per_node: maxr, nodes_to_browse: nodes || []
-      }, r4}
-    end
-  end
-
-  defp do_encode(:browse_res, %BrowseResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_array(r.results || [], &encode_browse_result/1) <>
-    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
-  end
-
-  defp do_decode(:browse_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {res,   r2} <- decode_array(r1, &decode_browse_result/1),
-         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
-      {:ok, %BrowseResponse{
-        response_header: hdr, results: res || [], diagnostic_infos: diags || []
-      }, r3}
-    end
-  end
-
-  # BrowseNext
-  defp do_encode(:browse_next_req, %{request_header: hdr, release_continuation_points: rel, continuation_points: cps}) do
-    encode_request_header(hdr || %RequestHeader{}) <>
-    encode_boolean(rel) <>
-    encode_array(cps || [], &encode_byte_string/1)
-  end
-  defp do_decode(:browse_next_req, data) do
-    with {hdr, r1} <- decode_request_header(data),
-         {rel, r2} <- decode_boolean(r1),
-         {cps, r3} <- decode_array(r2, &decode_byte_string/1) do
-      {:ok, %{request_header: hdr, release_continuation_points: rel, continuation_points: cps || []}, r3}
-    end
-  end
-
-  defp do_encode(:browse_next_res, %{response_header: hdr, results: res, diagnostic_infos: diags}) do
-    encode_response_header(hdr || %ResponseHeader{}) <>
-    encode_array(res || [], &encode_browse_result/1) <>
-    encode_array(diags || [], &encode_diagnostic_info/1)
-  end
-  defp do_decode(:browse_next_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {res,   r2} <- decode_array(r1, &decode_browse_result/1),
-         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
-      {:ok, %{response_header: hdr, results: res || [], diagnostic_infos: diags || []}, r3}
-    end
-  end
-
   # ── Read ──────────────────────────────────────────────────────────────────────
   # TimestampsToReturn: 0=Source, 1=Server, 2=Both, 3=Neither
 
@@ -840,42 +518,6 @@ defmodule ExOpcUA.Codec.Services do
       }, r4}
     end
   end
-
-  defp do_encode(:read_req, %ReadRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_double(r.max_age) <>
-    encode_uint32(r.timestamps_to_return) <>
-    encode_array(r.nodes_to_read || [], &encode_read_value_id/1)
-  end
-
-  defp do_decode(:read_req, data) do
-    with {hdr,   r1} <- decode_request_header(data),
-         {age,   r2} <- decode_double(r1),
-         {tsr,   r3} <- decode_uint32(r2),
-         {nodes, r4} <- decode_array(r3, &decode_read_value_id/1) do
-      {:ok, %ReadRequest{
-        request_header: hdr, max_age: age,
-        timestamps_to_return: tsr, nodes_to_read: nodes || []
-      }, r4}
-    end
-  end
-
-  defp do_encode(:read_res, %ReadResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_array(r.results || [], &encode_data_value/1) <>
-    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
-  end
-
-  defp do_decode(:read_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {res,   r2} <- decode_array(r1, &decode_data_value/1),
-         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
-      {:ok, %ReadResponse{
-        response_header: hdr, results: res || [], diagnostic_infos: diags || []
-      }, r3}
-    end
-  end
-
   # ── Write ─────────────────────────────────────────────────────────────────────
 
   defmodule WriteValue do
@@ -905,35 +547,6 @@ defmodule ExOpcUA.Codec.Services do
       {%WriteValue{node_id: nid, attribute_id: attr_id, index_range: idx_rng, value: dv}, r4}
     end
   end
-
-  defp do_encode(:write_req, %WriteRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_array(r.nodes_to_write || [], &encode_write_value/1)
-  end
-
-  defp do_decode(:write_req, data) do
-    with {hdr,   r1} <- decode_request_header(data),
-         {nodes, r2} <- decode_array(r1, &decode_write_value/1) do
-      {:ok, %WriteRequest{request_header: hdr, nodes_to_write: nodes || []}, r2}
-    end
-  end
-
-  defp do_encode(:write_res, %WriteResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_array(r.results || [], &encode_status_code/1) <>
-    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
-  end
-
-  defp do_decode(:write_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {res,   r2} <- decode_array(r1, &decode_status_code/1),
-         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
-      {:ok, %WriteResponse{
-        response_header: hdr, results: res || [], diagnostic_infos: diags || []
-      }, r3}
-    end
-  end
-
   # ── CreateSubscription ────────────────────────────────────────────────────────
 
   defmodule CreateSubscriptionRequest do
@@ -957,55 +570,6 @@ defmodule ExOpcUA.Codec.Services do
       revised_max_keep_alive_count: 3
     ]
   end
-
-  defp do_encode(:create_subscription_req, %CreateSubscriptionRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_double(r.requested_publishing_interval) <>
-    encode_uint32(r.requested_lifetime_count) <>
-    encode_uint32(r.requested_max_keep_alive_count) <>
-    encode_uint32(r.max_notifications_per_publish) <>
-    encode_boolean(r.publishing_enabled) <>
-    encode_byte(r.priority)
-  end
-
-  defp do_decode(:create_subscription_req, data) do
-    with {hdr,   r1} <- decode_request_header(data),
-         {pi,    r2} <- decode_double(r1),
-         {lc,    r3} <- decode_uint32(r2),
-         {ka,    r4} <- decode_uint32(r3),
-         {maxn,  r5} <- decode_uint32(r4),
-         {pub,   r6} <- decode_boolean(r5),
-         {prio,  r7} <- decode_byte(r6) do
-      {:ok, %CreateSubscriptionRequest{
-        request_header: hdr, requested_publishing_interval: pi,
-        requested_lifetime_count: lc, requested_max_keep_alive_count: ka,
-        max_notifications_per_publish: maxn, publishing_enabled: pub, priority: prio
-      }, r7}
-    end
-  end
-
-  defp do_encode(:create_subscription_res, %CreateSubscriptionResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_uint32(r.subscription_id) <>
-    encode_double(r.revised_publishing_interval) <>
-    encode_uint32(r.revised_lifetime_count) <>
-    encode_uint32(r.revised_max_keep_alive_count)
-  end
-
-  defp do_decode(:create_subscription_res, data) do
-    with {hdr, r1} <- decode_response_header(data),
-         {sid, r2} <- decode_uint32(r1),
-         {pi,  r3} <- decode_double(r2),
-         {lc,  r4} <- decode_uint32(r3),
-         {ka,  r5} <- decode_uint32(r4) do
-      {:ok, %CreateSubscriptionResponse{
-        response_header: hdr, subscription_id: sid,
-        revised_publishing_interval: pi, revised_lifetime_count: lc,
-        revised_max_keep_alive_count: ka
-      }, r5}
-    end
-  end
-
   # ── CreateMonitoredItems ──────────────────────────────────────────────────────
 
   defmodule MonitoringParameters do
@@ -1106,70 +670,6 @@ defmodule ExOpcUA.Codec.Services do
       }, r5}
     end
   end
-
-  defp do_encode(:create_monitored_items_req, %CreateMonitoredItemsRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_uint32(r.subscription_id) <>
-    encode_uint32(r.timestamps_to_return) <>
-    encode_array(r.items_to_create || [], &encode_monitored_item_create_req/1)
-  end
-
-  defp do_decode(:create_monitored_items_req, data) do
-    with {hdr,   r1} <- decode_request_header(data),
-         {sid,   r2} <- decode_uint32(r1),
-         {tsr,   r3} <- decode_uint32(r2),
-         {items, r4} <- decode_array(r3, &decode_monitored_item_create_req/1) do
-      {:ok, %CreateMonitoredItemsRequest{
-        request_header: hdr, subscription_id: sid,
-        timestamps_to_return: tsr, items_to_create: items || []
-      }, r4}
-    end
-  end
-
-  defp do_encode(:create_monitored_items_res, %CreateMonitoredItemsResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_array(r.results || [], &encode_monitored_item_create_result/1) <>
-    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
-  end
-
-  defp do_decode(:create_monitored_items_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {res,   r2} <- decode_array(r1, &decode_monitored_item_create_result/1),
-         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
-      {:ok, %CreateMonitoredItemsResponse{
-        response_header: hdr, results: res || [], diagnostic_infos: diags || []
-      }, r3}
-    end
-  end
-
-  # ── DeleteMonitoredItems ──────────────────────────────────────────────────────
-
-  defp do_encode(:delete_monitored_items_req, %{request_header: hdr, subscription_id: sid, monitored_item_ids: ids}) do
-    encode_request_header(hdr || %RequestHeader{}) <>
-    encode_uint32(sid) <>
-    encode_array(ids || [], &encode_uint32/1)
-  end
-  defp do_decode(:delete_monitored_items_req, data) do
-    with {hdr, r1} <- decode_request_header(data),
-         {sid, r2} <- decode_uint32(r1),
-         {ids, r3} <- decode_array(r2, &decode_uint32/1) do
-      {:ok, %{request_header: hdr, subscription_id: sid, monitored_item_ids: ids || []}, r3}
-    end
-  end
-
-  defp do_encode(:delete_monitored_items_res, %{response_header: hdr, results: res, diagnostic_infos: diags}) do
-    encode_response_header(hdr || %ResponseHeader{}) <>
-    encode_array(res || [], &encode_status_code/1) <>
-    encode_array(diags || [], &encode_diagnostic_info/1)
-  end
-  defp do_decode(:delete_monitored_items_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {res,   r2} <- decode_array(r1, &decode_status_code/1),
-         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
-      {:ok, %{response_header: hdr, results: res || [], diagnostic_infos: diags || []}, r3}
-    end
-  end
-
   # ── Publish ───────────────────────────────────────────────────────────────────
 
   defmodule SubscriptionAcknowledgement do
@@ -1265,89 +765,6 @@ defmodule ExOpcUA.Codec.Services do
       }, r3}
     end
   end
-
-  defp do_encode(:publish_req, %PublishRequest{} = r) do
-    encode_request_header(r.request_header || %RequestHeader{}) <>
-    encode_array(r.subscription_acknowledgements || [], &encode_sub_ack/1)
-  end
-
-  defp do_decode(:publish_req, data) do
-    with {hdr,  r1} <- decode_request_header(data),
-         {acks, r2} <- decode_array(r1, &decode_sub_ack/1) do
-      {:ok, %PublishRequest{
-        request_header: hdr, subscription_acknowledgements: acks || []
-      }, r2}
-    end
-  end
-
-  defp do_encode(:publish_res, %PublishResponse{} = r) do
-    encode_response_header(r.response_header || %ResponseHeader{}) <>
-    encode_uint32(r.subscription_id) <>
-    encode_array(r.available_sequence_numbers || [], &encode_uint32/1) <>
-    encode_boolean(r.more_notifications) <>
-    encode_notification_message(r.notification_message || %NotificationMessage{}) <>
-    encode_array(r.results || [], &encode_status_code/1) <>
-    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
-  end
-
-  defp do_decode(:publish_res, data) do
-    with {hdr,    r1} <- decode_response_header(data),
-         {sid,    r2} <- decode_uint32(r1),
-         {avail,  r3} <- decode_array(r2, &decode_uint32/1),
-         {more,   r4} <- decode_boolean(r3),
-         {notif,  r5} <- decode_notification_message(r4),
-         {res,    r6} <- decode_array(r5, &decode_status_code/1),
-         {diags,  r7} <- decode_array(r6, &decode_diagnostic_info/1) do
-      {:ok, %PublishResponse{
-        response_header: hdr, subscription_id: sid,
-        available_sequence_numbers: avail || [], more_notifications: more,
-        notification_message: notif, results: res || [], diagnostic_infos: diags || []
-      }, r7}
-    end
-  end
-
-  # ── DeleteSubscriptions ───────────────────────────────────────────────────────
-
-  defp do_encode(:delete_subscriptions_req, %{request_header: hdr, subscription_ids: ids}) do
-    encode_request_header(hdr || %RequestHeader{}) <>
-    encode_array(ids || [], &encode_uint32/1)
-  end
-  defp do_decode(:delete_subscriptions_req, data) do
-    with {hdr, r1} <- decode_request_header(data),
-         {ids, r2} <- decode_array(r1, &decode_uint32/1) do
-      {:ok, %{request_header: hdr, subscription_ids: ids || []}, r2}
-    end
-  end
-
-  defp do_encode(:delete_subscriptions_res, %{response_header: hdr, results: res, diagnostic_infos: diags}) do
-    encode_response_header(hdr || %ResponseHeader{}) <>
-    encode_array(res || [], &encode_status_code/1) <>
-    encode_array(diags || [], &encode_diagnostic_info/1)
-  end
-  defp do_decode(:delete_subscriptions_res, data) do
-    with {hdr,   r1} <- decode_response_header(data),
-         {res,   r2} <- decode_array(r1, &decode_status_code/1),
-         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
-      {:ok, %{response_header: hdr, results: res || [], diagnostic_infos: diags || []}, r3}
-    end
-  end
-
-  # ── ServiceFault ──────────────────────────────────────────────────────────────
-
-  defp do_encode(:service_fault, %{response_header: hdr}) do
-    encode_response_header(hdr || %ResponseHeader{})
-  end
-  defp do_decode(:service_fault, data) do
-    with {hdr, rest} <- decode_response_header(data) do
-      {:ok, %{response_header: hdr}, rest}
-    end
-  end
-
-  # ── Catch-all ─────────────────────────────────────────────────────────────────
-
-  defp do_encode(service, _params), do: {:error, {:unknown_service, service}}
-  defp do_decode(service, _data),   do: {:error, {:unknown_service, service}}
-
   # ── Helpers ───────────────────────────────────────────────────────────────────
 
   # AnonymousIdentityToken: ExtensionObject wrapping a null body with type i=321
@@ -1400,4 +817,616 @@ defmodule ExOpcUA.Codec.Services do
       additional_header: nil
     }
   end
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Wire encoding, by service
+  # ────────────────────────────────────────────────────────────────────────
+
+  # Encode and decode were written interleaved, one pair per service, which
+  # is how a codec is easiest to read. Elixir wants every clause of a
+  # function contiguous, so they are grouped here instead — encode first,
+  # then decode, both in the original service order, so the two halves still
+  # line up when read side by side. The per-service banners travel with the
+  # encode clauses.
+
+
+  defp do_encode(:open_secure_channel_req, %OpenSecureChannelRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_uint32(r.client_protocol_version) <>
+    encode_uint32(r.request_type) <>
+    encode_uint32(r.security_mode) <>
+    encode_byte_string(r.client_nonce) <>
+    encode_uint32(r.requested_lifetime)
+  end
+
+  defp do_encode(:open_secure_channel_res, %OpenSecureChannelResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_uint32(r.server_protocol_version) <>
+    encode_channel_security_token(r.security_token || %ChannelSecurityToken{}) <>
+    encode_byte_string(r.server_nonce)
+  end
+
+  defp do_encode(:close_secure_channel_req, %{request_header: hdr}) do
+    encode_request_header(hdr || %RequestHeader{})
+  end
+
+  defp do_encode(:close_secure_channel_res, %{response_header: hdr}) do
+    encode_response_header(hdr || %ResponseHeader{})
+  end
+
+
+  defp do_encode(:get_endpoints_req, %GetEndpointsRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_string(r.endpoint_url) <>
+    encode_array(r.locale_ids || [], &encode_string/1) <>
+    encode_array(r.profile_uris || [], &encode_string/1)
+  end
+
+  defp do_encode(:get_endpoints_res, %GetEndpointsResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_array(r.endpoints || [], &encode_endpoint_desc/1)
+  end
+
+
+  defp do_encode(:find_servers_req, %FindServersRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_string(r.endpoint_url) <>
+    encode_array(r.locale_ids || [], &encode_string/1) <>
+    encode_array(r.server_uris || [], &encode_string/1)
+  end
+
+  defp do_encode(:find_servers_res, %FindServersResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_array(r.servers || [], &encode_app_desc/1)
+  end
+
+
+  defp do_encode(:create_session_req, %CreateSessionRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_app_desc(r.client_description || %ApplicationDescription{}) <>
+    encode_string(r.server_uri) <>
+    encode_string(r.endpoint_url) <>
+    encode_string(r.session_name) <>
+    encode_byte_string(r.client_nonce) <>
+    encode_byte_string(r.client_certificate) <>
+    encode_double(r.requested_session_timeout) <>
+    encode_uint32(r.max_response_message_size)
+  end
+
+  defp do_encode(:create_session_res, %CreateSessionResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_node_id(r.session_id || NodeId.ns0(0)) <>
+    encode_node_id(r.authentication_token || NodeId.ns0(0)) <>
+    encode_double(r.revised_session_timeout) <>
+    encode_byte_string(r.server_nonce) <>
+    encode_byte_string(r.server_certificate) <>
+    encode_array(r.server_endpoints || [], &encode_endpoint_desc/1) <>
+    encode_array([], fn x -> x end) <>   # server_software_certificates (deprecated, empty array)
+    encode_signature(r.server_signature || %SignatureData{}) <>
+    encode_uint32(r.max_request_message_size)
+  end
+
+
+  defp do_encode(:activate_session_req, %ActivateSessionRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_signature(r.client_signature || %SignatureData{}) <>
+    encode_array([], fn x -> x end) <>   # client_software_certificates (deprecated)
+    encode_array(r.locale_ids || [], &encode_string/1) <>
+    encode_extension_object(r.user_identity_token || anonymous_identity_token()) <>
+    encode_signature(r.user_token_signature || %SignatureData{})
+  end
+
+  defp do_encode(:activate_session_res, %ActivateSessionResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_byte_string(r.server_nonce) <>
+    encode_array(r.results || [], &encode_status_code/1) <>
+    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
+  end
+
+  # ── CloseSession ──────────────────────────────────────────────────────────────
+
+  defp do_encode(:close_session_req, %{request_header: hdr, delete_subscriptions: del}) do
+    encode_request_header(hdr || %RequestHeader{}) <>
+    encode_boolean(del != false)
+  end
+
+  defp do_encode(:close_session_res, %{response_header: hdr}) do
+    encode_response_header(hdr || %ResponseHeader{})
+  end
+
+
+  defp do_encode(:browse_req, %BrowseRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_view_desc(r.view || %ViewDescription{}) <>
+    encode_uint32(r.max_references_per_node) <>
+    encode_array(r.nodes_to_browse || [], &encode_browse_desc/1)
+  end
+
+  defp do_encode(:browse_res, %BrowseResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_array(r.results || [], &encode_browse_result/1) <>
+    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
+  end
+
+  # BrowseNext
+  defp do_encode(:browse_next_req, %{request_header: hdr, release_continuation_points: rel, continuation_points: cps}) do
+    encode_request_header(hdr || %RequestHeader{}) <>
+    encode_boolean(rel) <>
+    encode_array(cps || [], &encode_byte_string/1)
+  end
+
+  defp do_encode(:browse_next_res, %{response_header: hdr, results: res, diagnostic_infos: diags}) do
+    encode_response_header(hdr || %ResponseHeader{}) <>
+    encode_array(res || [], &encode_browse_result/1) <>
+    encode_array(diags || [], &encode_diagnostic_info/1)
+  end
+
+
+  defp do_encode(:read_req, %ReadRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_double(r.max_age) <>
+    encode_uint32(r.timestamps_to_return) <>
+    encode_array(r.nodes_to_read || [], &encode_read_value_id/1)
+  end
+
+  defp do_encode(:read_res, %ReadResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_array(r.results || [], &encode_data_value/1) <>
+    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
+  end
+
+
+  defp do_encode(:write_req, %WriteRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_array(r.nodes_to_write || [], &encode_write_value/1)
+  end
+
+  defp do_encode(:write_res, %WriteResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_array(r.results || [], &encode_status_code/1) <>
+    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
+  end
+
+
+  defp do_encode(:create_subscription_req, %CreateSubscriptionRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_double(r.requested_publishing_interval) <>
+    encode_uint32(r.requested_lifetime_count) <>
+    encode_uint32(r.requested_max_keep_alive_count) <>
+    encode_uint32(r.max_notifications_per_publish) <>
+    encode_boolean(r.publishing_enabled) <>
+    encode_byte(r.priority)
+  end
+
+  defp do_encode(:create_subscription_res, %CreateSubscriptionResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_uint32(r.subscription_id) <>
+    encode_double(r.revised_publishing_interval) <>
+    encode_uint32(r.revised_lifetime_count) <>
+    encode_uint32(r.revised_max_keep_alive_count)
+  end
+
+
+  defp do_encode(:create_monitored_items_req, %CreateMonitoredItemsRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_uint32(r.subscription_id) <>
+    encode_uint32(r.timestamps_to_return) <>
+    encode_array(r.items_to_create || [], &encode_monitored_item_create_req/1)
+  end
+
+  defp do_encode(:create_monitored_items_res, %CreateMonitoredItemsResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_array(r.results || [], &encode_monitored_item_create_result/1) <>
+    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
+  end
+
+  # ── DeleteMonitoredItems ──────────────────────────────────────────────────────
+
+  defp do_encode(:delete_monitored_items_req, %{request_header: hdr, subscription_id: sid, monitored_item_ids: ids}) do
+    encode_request_header(hdr || %RequestHeader{}) <>
+    encode_uint32(sid) <>
+    encode_array(ids || [], &encode_uint32/1)
+  end
+
+  defp do_encode(:delete_monitored_items_res, %{response_header: hdr, results: res, diagnostic_infos: diags}) do
+    encode_response_header(hdr || %ResponseHeader{}) <>
+    encode_array(res || [], &encode_status_code/1) <>
+    encode_array(diags || [], &encode_diagnostic_info/1)
+  end
+
+
+  defp do_encode(:publish_req, %PublishRequest{} = r) do
+    encode_request_header(r.request_header || %RequestHeader{}) <>
+    encode_array(r.subscription_acknowledgements || [], &encode_sub_ack/1)
+  end
+
+  defp do_encode(:publish_res, %PublishResponse{} = r) do
+    encode_response_header(r.response_header || %ResponseHeader{}) <>
+    encode_uint32(r.subscription_id) <>
+    encode_array(r.available_sequence_numbers || [], &encode_uint32/1) <>
+    encode_boolean(r.more_notifications) <>
+    encode_notification_message(r.notification_message || %NotificationMessage{}) <>
+    encode_array(r.results || [], &encode_status_code/1) <>
+    encode_array(r.diagnostic_infos || [], &encode_diagnostic_info/1)
+  end
+
+  # ── DeleteSubscriptions ───────────────────────────────────────────────────────
+
+  defp do_encode(:delete_subscriptions_req, %{request_header: hdr, subscription_ids: ids}) do
+    encode_request_header(hdr || %RequestHeader{}) <>
+    encode_array(ids || [], &encode_uint32/1)
+  end
+
+  defp do_encode(:delete_subscriptions_res, %{response_header: hdr, results: res, diagnostic_infos: diags}) do
+    encode_response_header(hdr || %ResponseHeader{}) <>
+    encode_array(res || [], &encode_status_code/1) <>
+    encode_array(diags || [], &encode_diagnostic_info/1)
+  end
+
+  # ── ServiceFault ──────────────────────────────────────────────────────────────
+
+  defp do_encode(:service_fault, %{response_header: hdr}) do
+    encode_response_header(hdr || %ResponseHeader{})
+  end
+
+  # ── Catch-all ─────────────────────────────────────────────────────────────────
+
+  defp do_encode(service, _params), do: {:error, {:unknown_service, service}}
+
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Wire decoding, by service
+  # ────────────────────────────────────────────────────────────────────────
+
+  defp do_decode(:open_secure_channel_req, data) do
+    with {hdr,   r1} <- decode_request_header(data),
+         {cpv,   r2} <- decode_uint32(r1),
+         {rtype, r3} <- decode_uint32(r2),
+         {smode, r4} <- decode_uint32(r3),
+         {nonce, r5} <- decode_byte_string(r4),
+         {life,  r6} <- decode_uint32(r5) do
+      {:ok, %OpenSecureChannelRequest{
+        request_header: hdr, client_protocol_version: cpv,
+        request_type: rtype, security_mode: smode,
+        client_nonce: nonce, requested_lifetime: life
+      }, r6}
+    end
+  end
+
+  defp do_decode(:open_secure_channel_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {spv,   r2} <- decode_uint32(r1),
+         {token, r3} <- decode_channel_security_token(r2),
+         {nonce, r4} <- decode_byte_string(r3) do
+      {:ok, %OpenSecureChannelResponse{
+        response_header: hdr, server_protocol_version: spv,
+        security_token: token, server_nonce: nonce
+      }, r4}
+    end
+  end
+
+  defp do_decode(:close_secure_channel_req, data) do
+    with {hdr, rest} <- decode_request_header(data) do
+      {:ok, %{request_header: hdr}, rest}
+    end
+  end
+
+  defp do_decode(:close_secure_channel_res, data) do
+    with {hdr, rest} <- decode_response_header(data) do
+      {:ok, %{response_header: hdr}, rest}
+    end
+  end
+
+  defp do_decode(:get_endpoints_req, data) do
+    with {hdr,     r1} <- decode_request_header(data),
+         {ep_url,  r2} <- decode_string(r1),
+         {locales, r3} <- decode_array(r2, &decode_string/1),
+         {profiles,r4} <- decode_array(r3, &decode_string/1) do
+      {:ok, %GetEndpointsRequest{
+        request_header: hdr, endpoint_url: ep_url,
+        locale_ids: locales || [], profile_uris: profiles || []
+      }, r4}
+    end
+  end
+
+  defp do_decode(:get_endpoints_res, data) do
+    with {hdr, r1} <- decode_response_header(data),
+         {eps, r2} <- decode_array(r1, &decode_endpoint_desc/1) do
+      {:ok, %GetEndpointsResponse{response_header: hdr, endpoints: eps || []}, r2}
+    end
+  end
+
+  defp do_decode(:find_servers_req, data) do
+    with {hdr,      r1} <- decode_request_header(data),
+         {ep_url,   r2} <- decode_string(r1),
+         {locales,  r3} <- decode_array(r2, &decode_string/1),
+         {srv_uris, r4} <- decode_array(r3, &decode_string/1) do
+      {:ok, %FindServersRequest{
+        request_header: hdr, endpoint_url: ep_url,
+        locale_ids: locales || [], server_uris: srv_uris || []
+      }, r4}
+    end
+  end
+
+  defp do_decode(:find_servers_res, data) do
+    with {hdr,  r1} <- decode_response_header(data),
+         {srvs, r2} <- decode_array(r1, &decode_app_desc/1) do
+      {:ok, %FindServersResponse{response_header: hdr, servers: srvs || []}, r2}
+    end
+  end
+
+  defp do_decode(:create_session_req, data) do
+    with {hdr,     r1} <- decode_request_header(data),
+         {cli_desc,r2} <- decode_app_desc(r1),
+         {srv_uri, r3} <- decode_string(r2),
+         {ep_url,  r4} <- decode_string(r3),
+         {ses_name,r5} <- decode_string(r4),
+         {nonce,   r6} <- decode_byte_string(r5),
+         {cert,    r7} <- decode_byte_string(r6),
+         {timeout, r8} <- decode_double(r7),
+         {max_msg, r9} <- decode_uint32(r8) do
+      {:ok, %CreateSessionRequest{
+        request_header: hdr, client_description: cli_desc,
+        server_uri: srv_uri, endpoint_url: ep_url,
+        session_name: ses_name, client_nonce: nonce,
+        client_certificate: cert, requested_session_timeout: timeout,
+        max_response_message_size: max_msg
+      }, r9}
+    end
+  end
+
+  defp do_decode(:create_session_res, data) do
+    with {hdr,     r1}  <- decode_response_header(data),
+         {ses_id,  r2}  <- decode_node_id(r1),
+         {auth_tok,r3}  <- decode_node_id(r2),
+         {timeout, r4}  <- decode_double(r3),
+         {nonce,   r5}  <- decode_byte_string(r4),
+         {cert,    r6}  <- decode_byte_string(r5),
+         {eps,     r7}  <- decode_array(r6, &decode_endpoint_desc/1),
+         {_certs,  r8}  <- decode_array(r7, &decode_extension_object/1),
+         {sig,     r9}  <- decode_signature(r8),
+         {max_msg, r10} <- decode_uint32(r9) do
+      {:ok, %CreateSessionResponse{
+        response_header: hdr, session_id: ses_id,
+        authentication_token: auth_tok, revised_session_timeout: timeout,
+        server_nonce: nonce, server_certificate: cert,
+        server_endpoints: eps || [], server_signature: sig,
+        max_request_message_size: max_msg
+      }, r10}
+    end
+  end
+
+  defp do_decode(:activate_session_req, data) do
+    with {hdr,    r1} <- decode_request_header(data),
+         {sig,    r2} <- decode_signature(r1),
+         {_certs, r3} <- decode_array(r2, &decode_extension_object/1),
+         {locs,   r4} <- decode_array(r3, &decode_string/1),
+         {token,  r5} <- decode_extension_object(r4),
+         {tok_sig,r6} <- decode_signature(r5) do
+      {:ok, %ActivateSessionRequest{
+        request_header: hdr, client_signature: sig,
+        locale_ids: locs || [], user_identity_token: token,
+        user_token_signature: tok_sig
+      }, r6}
+    end
+  end
+
+  defp do_decode(:activate_session_res, data) do
+    with {hdr,    r1} <- decode_response_header(data),
+         {nonce,  r2} <- decode_byte_string(r1),
+         {res,    r3} <- decode_array(r2, &decode_status_code/1),
+         {diags,  r4} <- decode_array(r3, &decode_diagnostic_info/1) do
+      {:ok, %ActivateSessionResponse{
+        response_header: hdr, server_nonce: nonce,
+        results: res || [], diagnostic_infos: diags || []
+      }, r4}
+    end
+  end
+
+  defp do_decode(:close_session_req, data) do
+    with {hdr, r1} <- decode_request_header(data),
+         {del, r2} <- decode_boolean(r1) do
+      {:ok, %{request_header: hdr, delete_subscriptions: del}, r2}
+    end
+  end
+
+  defp do_decode(:close_session_res, data) do
+    with {hdr, rest} <- decode_response_header(data) do
+      {:ok, %{response_header: hdr}, rest}
+    end
+  end
+
+  defp do_decode(:browse_req, data) do
+    with {hdr,   r1} <- decode_request_header(data),
+         {view,  r2} <- decode_view_desc(r1),
+         {maxr,  r3} <- decode_uint32(r2),
+         {nodes, r4} <- decode_array(r3, &decode_browse_desc/1) do
+      {:ok, %BrowseRequest{
+        request_header: hdr, view: view,
+        max_references_per_node: maxr, nodes_to_browse: nodes || []
+      }, r4}
+    end
+  end
+
+  defp do_decode(:browse_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {res,   r2} <- decode_array(r1, &decode_browse_result/1),
+         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
+      {:ok, %BrowseResponse{
+        response_header: hdr, results: res || [], diagnostic_infos: diags || []
+      }, r3}
+    end
+  end
+
+  defp do_decode(:browse_next_req, data) do
+    with {hdr, r1} <- decode_request_header(data),
+         {rel, r2} <- decode_boolean(r1),
+         {cps, r3} <- decode_array(r2, &decode_byte_string/1) do
+      {:ok, %{request_header: hdr, release_continuation_points: rel, continuation_points: cps || []}, r3}
+    end
+  end
+
+  defp do_decode(:browse_next_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {res,   r2} <- decode_array(r1, &decode_browse_result/1),
+         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
+      {:ok, %{response_header: hdr, results: res || [], diagnostic_infos: diags || []}, r3}
+    end
+  end
+
+  defp do_decode(:read_req, data) do
+    with {hdr,   r1} <- decode_request_header(data),
+         {age,   r2} <- decode_double(r1),
+         {tsr,   r3} <- decode_uint32(r2),
+         {nodes, r4} <- decode_array(r3, &decode_read_value_id/1) do
+      {:ok, %ReadRequest{
+        request_header: hdr, max_age: age,
+        timestamps_to_return: tsr, nodes_to_read: nodes || []
+      }, r4}
+    end
+  end
+
+  defp do_decode(:read_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {res,   r2} <- decode_array(r1, &decode_data_value/1),
+         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
+      {:ok, %ReadResponse{
+        response_header: hdr, results: res || [], diagnostic_infos: diags || []
+      }, r3}
+    end
+  end
+
+  defp do_decode(:write_req, data) do
+    with {hdr,   r1} <- decode_request_header(data),
+         {nodes, r2} <- decode_array(r1, &decode_write_value/1) do
+      {:ok, %WriteRequest{request_header: hdr, nodes_to_write: nodes || []}, r2}
+    end
+  end
+
+  defp do_decode(:write_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {res,   r2} <- decode_array(r1, &decode_status_code/1),
+         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
+      {:ok, %WriteResponse{
+        response_header: hdr, results: res || [], diagnostic_infos: diags || []
+      }, r3}
+    end
+  end
+
+  defp do_decode(:create_subscription_req, data) do
+    with {hdr,   r1} <- decode_request_header(data),
+         {pi,    r2} <- decode_double(r1),
+         {lc,    r3} <- decode_uint32(r2),
+         {ka,    r4} <- decode_uint32(r3),
+         {maxn,  r5} <- decode_uint32(r4),
+         {pub,   r6} <- decode_boolean(r5),
+         {prio,  r7} <- decode_byte(r6) do
+      {:ok, %CreateSubscriptionRequest{
+        request_header: hdr, requested_publishing_interval: pi,
+        requested_lifetime_count: lc, requested_max_keep_alive_count: ka,
+        max_notifications_per_publish: maxn, publishing_enabled: pub, priority: prio
+      }, r7}
+    end
+  end
+
+  defp do_decode(:create_subscription_res, data) do
+    with {hdr, r1} <- decode_response_header(data),
+         {sid, r2} <- decode_uint32(r1),
+         {pi,  r3} <- decode_double(r2),
+         {lc,  r4} <- decode_uint32(r3),
+         {ka,  r5} <- decode_uint32(r4) do
+      {:ok, %CreateSubscriptionResponse{
+        response_header: hdr, subscription_id: sid,
+        revised_publishing_interval: pi, revised_lifetime_count: lc,
+        revised_max_keep_alive_count: ka
+      }, r5}
+    end
+  end
+
+  defp do_decode(:create_monitored_items_req, data) do
+    with {hdr,   r1} <- decode_request_header(data),
+         {sid,   r2} <- decode_uint32(r1),
+         {tsr,   r3} <- decode_uint32(r2),
+         {items, r4} <- decode_array(r3, &decode_monitored_item_create_req/1) do
+      {:ok, %CreateMonitoredItemsRequest{
+        request_header: hdr, subscription_id: sid,
+        timestamps_to_return: tsr, items_to_create: items || []
+      }, r4}
+    end
+  end
+
+  defp do_decode(:create_monitored_items_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {res,   r2} <- decode_array(r1, &decode_monitored_item_create_result/1),
+         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
+      {:ok, %CreateMonitoredItemsResponse{
+        response_header: hdr, results: res || [], diagnostic_infos: diags || []
+      }, r3}
+    end
+  end
+
+  defp do_decode(:delete_monitored_items_req, data) do
+    with {hdr, r1} <- decode_request_header(data),
+         {sid, r2} <- decode_uint32(r1),
+         {ids, r3} <- decode_array(r2, &decode_uint32/1) do
+      {:ok, %{request_header: hdr, subscription_id: sid, monitored_item_ids: ids || []}, r3}
+    end
+  end
+
+  defp do_decode(:delete_monitored_items_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {res,   r2} <- decode_array(r1, &decode_status_code/1),
+         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
+      {:ok, %{response_header: hdr, results: res || [], diagnostic_infos: diags || []}, r3}
+    end
+  end
+
+  defp do_decode(:publish_req, data) do
+    with {hdr,  r1} <- decode_request_header(data),
+         {acks, r2} <- decode_array(r1, &decode_sub_ack/1) do
+      {:ok, %PublishRequest{
+        request_header: hdr, subscription_acknowledgements: acks || []
+      }, r2}
+    end
+  end
+
+  defp do_decode(:publish_res, data) do
+    with {hdr,    r1} <- decode_response_header(data),
+         {sid,    r2} <- decode_uint32(r1),
+         {avail,  r3} <- decode_array(r2, &decode_uint32/1),
+         {more,   r4} <- decode_boolean(r3),
+         {notif,  r5} <- decode_notification_message(r4),
+         {res,    r6} <- decode_array(r5, &decode_status_code/1),
+         {diags,  r7} <- decode_array(r6, &decode_diagnostic_info/1) do
+      {:ok, %PublishResponse{
+        response_header: hdr, subscription_id: sid,
+        available_sequence_numbers: avail || [], more_notifications: more,
+        notification_message: notif, results: res || [], diagnostic_infos: diags || []
+      }, r7}
+    end
+  end
+
+  defp do_decode(:delete_subscriptions_req, data) do
+    with {hdr, r1} <- decode_request_header(data),
+         {ids, r2} <- decode_array(r1, &decode_uint32/1) do
+      {:ok, %{request_header: hdr, subscription_ids: ids || []}, r2}
+    end
+  end
+
+  defp do_decode(:delete_subscriptions_res, data) do
+    with {hdr,   r1} <- decode_response_header(data),
+         {res,   r2} <- decode_array(r1, &decode_status_code/1),
+         {diags, r3} <- decode_array(r2, &decode_diagnostic_info/1) do
+      {:ok, %{response_header: hdr, results: res || [], diagnostic_infos: diags || []}, r3}
+    end
+  end
+
+  defp do_decode(:service_fault, data) do
+    with {hdr, rest} <- decode_response_header(data) do
+      {:ok, %{response_header: hdr}, rest}
+    end
+  end
+
+  defp do_decode(service, _data),   do: {:error, {:unknown_service, service}}
+
 end

@@ -42,7 +42,7 @@ defmodule ExOpcUA.Server.NodeManager do
   """
 
   alias ExOpcUA.Codec.Services.{ReadValueId, WriteValue, BrowseDescription, BrowseResult}
-  alias ExOpcUA.Codec.Types.{DataValue, Variant}
+  alias ExOpcUA.Codec.Types.DataValue
   import ExOpcUA.Codec.Primitives
   import ExOpcUA.Codec.Types
 

@@ -240,8 +240,13 @@ defmodule ExOpcUA.Codec.Primitives do
   end
   defp decode_array_elements(data, n, acc, decode_fn) do
     case decode_fn.(data) do
+      # Guarded and first. {item, rest} matches any two-tuple, so an error from
+      # decode_fn was being taken as a successfully decoded item and its reason
+      # atom used as the remaining binary — the error clause below it could
+      # never run. The guard keeps a decoder that legitimately yields the atom
+      # :error as a *value* working, since that pairs it with a binary rest.
+      {:error, reason} when not is_binary(reason) -> {:error, reason}
       {item, rest} -> decode_array_elements(rest, n - 1, [item | acc], decode_fn)
-      {:error, _} = err -> err
     end
   end
 end

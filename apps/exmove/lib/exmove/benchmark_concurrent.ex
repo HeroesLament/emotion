@@ -127,9 +127,6 @@ defmodule ExMove.BenchmarkConcurrent do
     )
     IO.puts(String.duplicate("─", 60))
 
-    all_times    = []
-    all_conv     = []
-
     {all_times, all_conv} = Enum.reduce(results, {[], []}, fn {i, solves}, {at, ac} ->
       times   = Enum.map(solves, &elem(&1, 0)) |> Enum.sort()
       n       = length(times)

@@ -22,9 +22,9 @@ defmodule ExOpcUA.Client.Session do
   alias ExOpcUA.Codec.Types.NodeId
   alias ExOpcUA.Codec.Message.{MsgChunk, SequenceHeader, SymmetricSecurityHeader, AsymmetricSecurityHeader}
   alias ExOpcUA.Codec.Services.{
-    OpenSecureChannelRequest, OpenSecureChannelResponse,
-    CreateSessionRequest, CreateSessionResponse,
-    ActivateSessionRequest, ActivateSessionResponse
+    OpenSecureChannelRequest,
+    CreateSessionRequest,
+    ActivateSessionRequest
   }
 
   defstruct [
@@ -70,7 +70,9 @@ defmodule ExOpcUA.Client.Session do
     end)
   end
 
-  def unsubscribe(pid, sub_id, timeout) do
+  # The timeout is accepted for symmetry with the other session calls but not
+  # used: SubManager.unsubscribe/2 takes none.
+  def unsubscribe(pid, sub_id, _timeout) do
     with_sub_manager(pid, fn sm ->
       ExOpcUA.Client.SubManager.unsubscribe(sm, sub_id)
     end)

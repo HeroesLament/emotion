@@ -54,8 +54,9 @@ defmodule ExMove.IK do
 
   Tries the provided seed first, then up to `restarts` random seeds drawn
   from the joint ranges of the chain. Stops as soon as any attempt returns
-  `:ok` or `:near_singular`. Returns the best result seen across all attempts
-  (lowest TCP error) if all fail.
+  `:ok` or `:near_singular`. If every attempt fails, returns the first solver
+  failure rather than a summary: the NIF reports a reason and no residual, so
+  there is nothing to rank failures by.
 
   Restart policy lives here in Elixir — the NIF stays a pure function.
 
@@ -66,14 +67,24 @@ defmodule ExMove.IK do
 
     seeds = [seed | random_seeds(chain, restarts)]
 
-    Enum.reduce_while(seeds, {:error, {:no_solution, "no seeds tried"}}, fn s, best ->
+    # `nil` rather than a placeholder error as the accumulator, so "nothing has
+    # failed yet" and "something failed" are distinguishable. The previous
+    # version seeded the fold with {:no_solution, "no seeds tried"} and compared
+    # against it with a better/2 that could never prefer the real failure — so a
+    # run that tried six seeds and failed six times reported "no seeds tried".
+    seeds
+    |> Enum.reduce_while(nil, fn s, first_failure ->
       case solve(chain, target, s, opts) do
         {:ok, _, _, _} = result            -> {:halt, result}
         {:near_singular, _, _, _} = result -> {:halt, result}
         {:constrained, _, _, _} = result   -> {:halt, result}
-        {:error, _} = result               -> {:cont, better(result, best)}
+        {:error, _} = result               -> {:cont, first_failure || result}
       end
     end)
+    |> case do
+      nil    -> {:error, {:no_solution, "no seeds tried"}}
+      result -> result
+    end
   end
 
   @doc """
@@ -94,8 +105,8 @@ defmodule ExMove.IK do
     flat = NIF.jacobian(nif_joints, positions)
     n = length(chain.joints)
     # flat is row-major 6×n — rows 0-2 linear, rows 3-5 angular
-    linear  = for i <- 0..2, do: for j <- 0..(n-1), do: Enum.at(flat, i*n + j)
-    angular = for i <- 3..5, do: for j <- 0..(n-1), do: Enum.at(flat, i*n + j)
+    linear  = for i <- 0..2, do: (for j <- 0..(n - 1), do: Enum.at(flat, i * n + j))
+    angular = for i <- 3..5, do: (for j <- 0..(n - 1), do: Enum.at(flat, i * n + j))
     %{linear: linear, angular: angular, flat: flat, n: n}
   end
 
@@ -243,7 +254,6 @@ defmodule ExMove.IK do
   # Generate n random seeds drawn uniformly from each joint's limit range.
   # Continuous joints (no limit) use [-π, π].
   defp random_seeds(%Chain{joints: joints}, n) do
-    dof = length(joints)
     Enum.map(1..n, fn _ ->
       positions = Enum.map(joints, fn joint ->
         {lo, hi} = case joint.limit do
@@ -255,15 +265,6 @@ defmodule ExMove.IK do
       JointState.from_positions(positions)
     end)
   end
-
-  # Pick the better of two results — success > constrained > error.
-  # Used to track best-effort across restarts.
-  defp better({:ok, _, _, _} = a,            _),                          do: a
-  defp better(_,                              {:ok, _, _, _} = b),         do: b
-  defp better({:near_singular, _, _, _} = a, _),                          do: a
-  defp better(_,                              {:near_singular, _, _, _} = b), do: b
-  defp better({:constrained, _, _, _} = a,   {:error, _}),                do: a
-  defp better(_,                              b),                          do: b
 
   defp to_nif_joint(%ExMove.Joint{
     origin: {ox, oy, oz},

@@ -183,8 +183,9 @@ defmodule ExGCode.Parser do
   # Modal state
   # ---------------------------------------------------------------------------
 
-  # fixture_offset is {ox, oy, oz} in mm — added to every GCode coordinate
-  defp frame_to_modal(frame, offset \\ {0.0, 0.0, 0.0})
+  # fixture_offset is {ox, oy, oz} in mm — added to every GCode coordinate.
+  # No default: every call site passes an offset, so the default head only
+  # generated an arity nothing used.
   defp frame_to_modal(%Frame{} = f, {ox, oy, oz} = offset) do
     %__MODULE__{
       x:              f.x  * 1000.0 - ox,

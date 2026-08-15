@@ -286,9 +286,6 @@ pub fn condition_number_from_jac(jac: &[f64], n: usize) -> f64 {
     if s_min < 1e-12 { f64::INFINITY } else { s_max / s_min }
 }
 
-pub fn condition_number(jac: &[f64], n: usize) -> f64 {
-    condition_number_from_jac(jac, n)
-}
 
 // --- Jacobi eigenvalues of 6×6 symmetric matrix -----------------------------
 

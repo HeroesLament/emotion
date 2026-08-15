@@ -65,6 +65,9 @@ pub fn translation_of(m: &Mat4) -> (f64, f64, f64) {
 }
 
 /// Extract RPY from rotation submatrix
+// Not called yet: the inverse of the rpy->matrix path, wanted as soon as FK
+// returns a pose rather than a matrix.
+#[allow(dead_code)]
 pub fn rpy_of(m: &Mat4) -> (f64, f64, f64) {
     let pitch = (-m[8]).atan2((m[0]*m[0] + m[4]*m[4]).sqrt());
     let yaw   = m[4].atan2(m[0]);
@@ -86,6 +89,9 @@ pub fn joint_transform(
 }
 
 /// Compose a series of transforms
+// Not called yet: the solver folds transforms inline. Kept because a math
+// module without compose is a math module people reimplement badly.
+#[allow(dead_code)]
 pub fn compose(transforms: &[Mat4]) -> Mat4 {
     transforms.iter().fold(identity(), |acc, t| mul(&acc, t))
 }

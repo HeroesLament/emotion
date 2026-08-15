@@ -20,23 +20,27 @@ defmodule ExOpcUA.Server.Connection do
   require Logger
 
   alias ExOpcUA.Codec.{Primitives, Types, Message, Services}
-  alias ExOpcUA.Codec.Types.{NodeId, RequestHeader, ResponseHeader}
+  alias ExOpcUA.Codec.Types.NodeId
   alias ExOpcUA.Codec.Message.{Hello, Acknowledge, MsgChunk, SequenceHeader, SymmetricSecurityHeader, AsymmetricSecurityHeader}
+  # Only the responses this server constructs, plus the two request structs it
+  # matches on directly. The requests it merely decodes arrive as already-built
+  # structs from Services and need no alias here.
   alias ExOpcUA.Codec.Services.{
     OpenSecureChannelRequest, OpenSecureChannelResponse, ChannelSecurityToken,
     GetEndpointsRequest, GetEndpointsResponse,
-    FindServersRequest, FindServersResponse,
-    CreateSessionRequest, CreateSessionResponse,
-    ActivateSessionRequest, ActivateSessionResponse,
-    ReadRequest, ReadResponse, WriteRequest, WriteResponse,
-    BrowseRequest, BrowseResponse,
-    CreateSubscriptionRequest, CreateSubscriptionResponse,
-    CreateMonitoredItemsRequest, CreateMonitoredItemsResponse,
-    PublishRequest, PublishResponse,
+    FindServersResponse,
+    CreateSessionResponse,
+    ActivateSessionResponse,
+    ReadResponse, WriteResponse,
+    BrowseResponse,
+    CreateSubscriptionResponse,
+    CreateMonitoredItemsResponse,
+    PublishResponse,
     NotificationMessage
   }
 
-  @recv_timeout    30_000   # ms to wait for data before closing idle connection
+  # No idle-connection timeout yet. There was a @recv_timeout of 30_000 here
+  # that nothing read, which reads as a feature until you look for it.
   @session_timeout 600_000  # ms default session timeout
   @channel_lifetime 3_600_000  # ms
 
@@ -256,7 +260,7 @@ defmodule ExOpcUA.Server.Connection do
 
   # ── OpenSecureChannel ─────────────────────────────────────────────────────────
 
-  defp handle_open_secure_channel(%MsgChunk{body: body, sequence_header: seq_hdr} = chunk, state) do
+  defp handle_open_secure_channel(%MsgChunk{body: body} = chunk, state) do
     # OPN body starts with a TypeId NodeId prefix — strip it before decoding,
     # same as dispatch_service does for MSG chunks.
     {_type_node_id, body_without_type_id} = Types.decode_node_id(body)
@@ -288,7 +292,7 @@ defmodule ExOpcUA.Server.Connection do
 
   # ── Chunk reassembly ──────────────────────────────────────────────────────────
 
-  defp handle_msg_chunk(%MsgChunk{sequence_header: seq_hdr, is_final: :abort} = chunk, state) do
+  defp handle_msg_chunk(%MsgChunk{sequence_header: seq_hdr, is_final: :abort}, state) do
     req_id = seq_hdr.request_id
     new_pending = Map.delete(state.pending_chunks, req_id)
     Logger.debug("[ExOpcUA.Conn] Chunk abort for request_id=#{req_id}")
@@ -645,7 +649,7 @@ defmodule ExOpcUA.Server.Connection do
   end
 
   defp collect_notifications(sub, state) do
-    Enum.reduce(sub.monitored_items, {[], false}, fn {_mid, mi}, {acc, changed} ->
+    Enum.reduce(sub.monitored_items, {[], false}, fn {_mid, mi}, {acc, _changed} ->
       dv = state.node_manager.handle_read(%Services.ReadValueId{
         node_id: mi.node_id,
         attribute_id: mi.attribute_id
@@ -718,7 +722,7 @@ defmodule ExOpcUA.Server.Connection do
 
   # ── Helpers ───────────────────────────────────────────────────────────────────
 
-  defp require_session(%{session_state: :activated} = state, fun, _chunk, _outer_state) do
+  defp require_session(%{session_state: :activated}, fun, _chunk, _outer_state) do
     fun.()
   end
   defp require_session(_state, _fun, chunk, outer_state) do

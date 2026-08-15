@@ -19,7 +19,7 @@ defmodule ExOpcUA.Client.Channel do
 
   alias ExOpcUA.Codec.{Types, Services, Message}
   alias ExOpcUA.Codec.Types.NodeId
-  alias ExOpcUA.Codec.Message.{MsgChunk, SequenceHeader, SymmetricSecurityHeader, AsymmetricSecurityHeader}
+  alias ExOpcUA.Codec.Message.{MsgChunk, SequenceHeader, SymmetricSecurityHeader}
   alias ExOpcUA.Codec.Services.{
     ReadRequest, ReadValueId,
     WriteRequest, WriteValue,

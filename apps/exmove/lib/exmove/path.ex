@@ -40,8 +40,13 @@ defmodule ExMove.Path do
     dist = position_distance(a, b)
 
     if dist < 1.0e-9 do
-      # Zero-length move — single frame (orientation-only change handled below)
-      Stream.once(fn -> b end)
+      # Zero-length move — single frame (orientation-only change handled below).
+      #
+      # Stream.once/1 is not a function Elixir has, so every zero-length move
+      # raised UndefinedFunctionError instead of returning a frame. A one-element
+      # list is enumerable and lazy enough for a single item; Stream.map keeps
+      # the documented return type a Stream.
+      Stream.map([b], & &1)
     else
       step     = feedrate_mm_s / hz / 1000.0   # mm/s ÷ hz → m per tick
       n_steps  = ceil(dist / step)
@@ -154,7 +159,7 @@ defmodule ExMove.Path do
   end
 
   # Spherical linear interpolation between two quaternions
-  defp slerp({w0, x0, y0, z0} = q0, {w1, x1, y1, z1}, t) do
+  defp slerp({w0, x0, y0, z0}, {w1, x1, y1, z1}, t) do
     dot = w0*w1 + x0*x1 + y0*y1 + z0*z1
 
     # If dot < 0, negate one quaternion to take the short path
