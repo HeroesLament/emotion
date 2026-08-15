@@ -40,7 +40,7 @@ defmodule ExProto.Jog do
   instead would let a loaded axis fall, and would make every brief network stall
   a fault an operator has to clear.
 
-  ## One holder at a time
+  ## One holder at a time, and the hold covers everything underneath it
 
   An axis being jogged is held by the session doing it, and a second session
   asking for the same axis is refused rather than queued or blended. Two
@@ -48,8 +48,27 @@ defmodule ExProto.Jog do
   do something neither operator asked for, and each would see the other's
   motion as their own command misbehaving. The hold is released when the holder
   releases it, when the holder's connection dies, when the assertions lapse, or
-  when any other command is issued on that axis: a `stop` outranks a jog, and
+  when any other command is issued on that node: a `stop` outranks a jog, and
   it comes from someone who can see the machine.
+
+  A hold on one node covers every node under it, and is covered by every node
+  above it. Node ids are dotted paths, so `arm` contains `arm.axes.j1` and two
+  keys overlap when one is a path prefix of the other — `arm.axes.j1` and
+  `arm.axes.j2` do not.
+
+  This is not tidiness. A Cartesian jog is one held command on the robot that
+  moves six joints, and a per-axis hold would let a second session take
+  `arm.axes.j4` while the first was already turning it through the arm: two
+  sessions commanding one joint through two different objects, each of them
+  correctly told they held what they asked for. The check has to be on the tree,
+  not on the name.
+
+  It cuts the other way too, and that is the half worth spelling out. When a
+  hold is superseded by an ordinary command on the *same* node, the hold is
+  simply dropped — whoever sent `stop` gets to say what happens next. When it
+  is superseded from somewhere else in the tree, the hold is *zeroed* first,
+  because a `stop` on one joint stops that joint and says nothing about the
+  other five a Cartesian hold is still moving.
 
   ## Generic, not axis-specific
 
@@ -149,28 +168,51 @@ defmodule ExProto.Jog do
 
   @impl GenServer
   def handle_call({:assert, key, node_id, args, source, owner}, _from, state) do
-    case Map.get(state.holds, key) do
-      %{owner: other} when other != owner ->
-        {:reply, {:error, :held}, state}
+    overlapping = overlapping(state, key)
 
-      existing ->
-        deadline = deadline(args)
+    if Enum.any?(overlapping, fn {_key, hold} -> hold.owner != owner end) do
+      {:reply, {:error, :held}, state}
+    else
+      # The holder's own overlapping holds elsewhere in the tree are given up,
+      # and given up properly: a session moving from jogging one joint to
+      # jogging the whole arm must not leave the joint running on a hold nobody
+      # is asserting against any more.
+      state =
+        Enum.reduce(overlapping, state, fn
+          {^key, _hold}, state -> state
+          {other, hold}, state -> neutralise(state, other, hold)
+        end)
 
-        case apply_setpoint(source, node_id, args) do
-          :ok ->
-            {:reply, {:ok, deadline}, hold(state, key, node_id, args, source, owner, existing, deadline)}
+      existing = Map.get(state.holds, key)
+      deadline = deadline(args)
 
-          {:error, reason} ->
-            # A refused setpoint must not leave a hold behind. Otherwise an axis
-            # that never started moving is locked against every other session
-            # until a deadline nobody is watching expires.
-            {:reply, {:error, reason}, drop(state, key, existing)}
-        end
+      case apply_setpoint(source, node_id, args) do
+        :ok ->
+          {:reply, {:ok, deadline},
+           hold(state, key, node_id, args, source, owner, existing, deadline)}
+
+        {:error, reason} ->
+          # A refused setpoint must not leave a hold behind. Otherwise an axis
+          # that never started moving is locked against every other session
+          # until a deadline nobody is watching expires.
+          {:reply, {:error, reason}, drop(state, key, existing)}
+      end
     end
   end
 
+  # Exact match is dropped; anything else overlapping is zeroed first. The
+  # command that caused this covers the node it names and nothing else, so a
+  # hold reaching further than that has to be stopped rather than abandoned.
   def handle_call({:release, key}, _from, state) do
-    {:reply, :ok, drop(state, key, Map.get(state.holds, key))}
+    state =
+      state
+      |> overlapping(key)
+      |> Enum.reduce(state, fn
+        {^key, hold}, state -> drop(state, key, hold)
+        {other, hold}, state -> neutralise(state, other, hold)
+      end)
+
+    {:reply, :ok, state}
   end
 
   def handle_call({:holder, key}, _from, state) do
@@ -222,6 +264,18 @@ defmodule ExProto.Jog do
       apply_setpoint(hold.source, hold.node_id, neutral(hold.args))
     end)
   end
+
+  # Every hold whose key overlaps this one: the same node, an ancestor of it, or
+  # a descendant. Node ids are dotted paths, so containment is a prefix test on
+  # whole segments — `axes.j1` is inside `axes`, and `axes.j10` is not inside
+  # `axes.j1`, which a bare `String.starts_with?/2` would cheerfully claim.
+  defp overlapping(state, key) do
+    Enum.filter(state.holds, fn {held, _hold} -> overlaps?(held, key) end)
+  end
+
+  defp overlaps?(a, b), do: a == b or contains?(a, b) or contains?(b, a)
+
+  defp contains?(outer, inner), do: String.starts_with?(inner, outer <> ".")
 
   # ── Holds ─────────────────────────────────────────────────────────────────
 
