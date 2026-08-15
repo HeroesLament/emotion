@@ -10,7 +10,7 @@ contract inside one of them would quietly make that one authoritative.
 
 | File                             | What it is                                  |
 |----------------------------------|---------------------------------------------|
-| `emotion-protocol.openrpc.json`  | The interface contract (OpenRPC 1.3.2)      |
+| `emotion-protocol.openrpc.json`  | The interface contract (OpenRPC 1.3.2) — **generated** |
 | `DESIGN.md`                      | Drive layer, CiA 402, FOC, and the force path |
 
 ## The stack
@@ -33,9 +33,35 @@ Bulk transfer — program source, logs, motion traces — is *not* on this link.
 is plain HTTP on the same host so it stays curl-able and does not compete with
 live telemetry. The endpoints are listed under `x-bulkTransfer` in the document.
 
+## Generated, not written
+
+`emotion-protocol.openrpc.json` is produced by `mix exmo.openrpc` from the ExMo
+Information Model in `apps/exhmi`. **Do not edit it.** Change the model and
+regenerate.
+
+    mix exmo.openrpc            # write the document
+    mix exmo.openrpc --check    # fail if the committed file is stale
+
+The reason is that the OPC UA projection derives from the same model. Two
+hand-maintained descriptions of one controller agree right up until they don't,
+and the divergence gets discovered by a client rather than by a test. `--check`
+belongs in CI: a model change nobody regenerated for then fails the build
+instead of shipping a document describing a controller that no longer exists.
+
+Output is canonical — keys sorted, so an unchanged model regenerates
+byte-identically and the diff on a commit is a change rather than a reshuffle.
+
+The method surface is fixed and small. What those methods operate on is
+discovered at runtime by browsing the model, exactly as an OPC UA client browses
+an address space, which is why adding a seventh axis changes nothing about the
+protocol. `x-nodes` carries a snapshot for tooling and review, and is marked
+informative: a controller can be configured differently from the build that
+generated the file, so a client browses rather than trusting it.
+
 ## Validating
 
-The document is checked against the official OpenRPC meta-schema:
+Beyond `--check`, the document is verified against the official OpenRPC
+meta-schema:
 
 ```sh
 npm install @open-rpc/meta-schema
