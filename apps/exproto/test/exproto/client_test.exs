@@ -201,4 +201,124 @@ defmodule ExLinkTest do
                )
     end
   end
+
+  describe "keepalive" do
+    # A parked arm sends nothing — a conflating subscription only speaks when a
+    # value changes — so before ping/pong the listener closed the link after
+    # 60s of stillness, which is most of the time a studio is open.
+    #
+    # Real numbers are a 60s timeout and a 20s ping. Scaled by 30 here so this
+    # costs three seconds instead of two minutes; the ratio that matters, three
+    # pings inside one timeout, is preserved.
+    setup %{table: table} do
+      {:ok, source} = Static.start_link(values: %{"axes.j1.position" => 0.25})
+      port = 4300 + System.unique_integer([:positive, :monotonic])
+      dir = Path.join(System.tmp_dir!(), "ka-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      {:ok, _pid} =
+        Endpoint.start_link(
+          table: table,
+          source: {Static, source},
+          port: port,
+          scheme: :https,
+          tls: [dir: dir, hostnames: ["localhost"]],
+          idle_timeout: 2_000,
+          keepalive_ms: 600
+        )
+
+      {:ok, ka_port: port}
+    end
+
+    test "an idle link outlives the timeout", ctx do
+      {:ok, %{"token" => token}} =
+        Client.login("localhost", ctx.ka_port, ctx.username, ctx.password, opts(ctx.hosts))
+
+      {:ok, session, _} = Client.connect("localhost", ctx.ka_port, token, opts(ctx.hosts))
+
+      {:ok, session, response} =
+        Client.request(session, "nodes/subscribe", %{
+          "nodeIds" => ["axes.j1.position"],
+          "rateHz" => 5
+        })
+
+      assert response["result"]["subscriptionId"]
+
+      # Draining rather than sleeping, because a ping is only answered while
+      # something is reading — see ExLink's moduledoc. Nothing is published
+      # during this, so every wakeup is a ping and the pongs are what keep the
+      # link open.
+      session = drain(session, 3_500)
+
+      {:ok, _session, response} =
+        Client.request(session, "nodes/read", %{"nodeIds" => ["axes.j1.position"]})
+
+      assert [%{"value" => 0.25}] = response["result"]["values"]
+    end
+
+    test "a client that ignores pings is dropped, which is what we fixed", ctx do
+      # The counterfactual, so the test above cannot pass for some other
+      # reason. Raw Mint here — no pong — and the listener closes it.
+      {:ok, %{"token" => token}} =
+        Client.login("localhost", ctx.ka_port, ctx.username, ctx.password, opts(ctx.hosts))
+
+      {:ok, conn} =
+        Mint.HTTP.connect(:https, "localhost", ctx.ka_port,
+          transport_opts: [verify: :verify_none],
+          protocols: [:http1]
+        )
+
+      {:ok, conn, ref} =
+        Mint.WebSocket.upgrade(:wss, conn, "/rpc", [{"authorization", "Bearer " <> token}])
+
+      assert closed_within?(conn, ref, 6_000)
+    end
+  end
+
+  # Reads for `budget` ms, answering pings as they arrive and expecting no data.
+  defp drain(session, budget) do
+    deadline = System.monotonic_time(:millisecond) + budget
+
+    Stream.repeatedly(fn -> :tick end)
+    |> Enum.reduce_while(session, fn _, session ->
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining <= 0 do
+        {:halt, session}
+      else
+        case Client.recv(session, min(remaining, 250)) do
+          {:ok, session, _frames} -> {:cont, session}
+          {:error, :timeout} -> {:cont, session}
+          {:error, reason} -> flunk("link dropped while idle: #{inspect(reason)}")
+        end
+      end
+    end)
+  end
+
+  # Drains until the transport closes, ignoring every frame — the behaviour of
+  # a client that does not answer pings.
+  defp closed_within?(conn, ref, budget) do
+    deadline = System.monotonic_time(:millisecond) + budget
+
+    Stream.repeatedly(fn -> :tick end)
+    |> Enum.reduce_while(false, fn _, _acc ->
+      remaining = deadline - System.monotonic_time(:millisecond)
+
+      if remaining <= 0 do
+        {:halt, false}
+      else
+        receive do
+          message ->
+            case Mint.WebSocket.stream(conn, message) do
+              {:ok, _conn, _responses} -> {:cont, false}
+              {:error, _conn, _reason, _responses} -> {:halt, true}
+              :unknown -> {:cont, false}
+            end
+        after
+          remaining -> {:halt, false}
+        end
+      end
+    end)
+    |> tap(fn _ -> _ = ref end)
+  end
 end

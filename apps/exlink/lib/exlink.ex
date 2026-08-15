@@ -21,6 +21,20 @@ defmodule ExLink do
   agree, so drift is a build failure rather than a handshake failure in a
   workshop.
 
+  ## Pings are answered only while something is reading
+
+  The controller pings to keep an otherwise silent link open, and the pong sent
+  back is what actually resets its idle timer. That pong is sent from
+  `stream/2`, which means a client that stops reading stops answering, and a
+  client that sleeps through the timeout is dropped exactly as if the
+  keepalive did not exist.
+
+  This is not a quirk of this client — no WebSocket client can answer a frame
+  it has not read — but it does mean the owning process must be in a receive
+  loop or a GenServer. `EMotion.Link` is a GenServer, so it answers on every
+  message; a script that wants to idle must call `recv/2` rather than
+  `Process.sleep/1`.
+
   ## Trust on first use, enforced
 
   The controller mints a self-signed certificate, so certificate-authority
@@ -272,14 +286,48 @@ defmodule ExLink do
           |> IO.iodata_to_binary()
 
         {:ok, websocket, decoded} = Mint.WebSocket.decode(session.websocket, data)
-        frames = for {:text, text} <- decoded, do: :json.decode(text)
-        {:ok, %{session | conn: conn, websocket: websocket}, frames}
+        control(%{session | conn: conn, websocket: websocket}, decoded)
 
       {:error, _conn, reason, _responses} ->
         {:error, reason}
 
       :unknown ->
         :unknown
+    end
+  end
+
+  # Control frames, which this used to drop on the floor.
+  #
+  # Mint does not answer a ping for you. The controller pings every 20 seconds
+  # to keep the link open, and its idle timer is reset by data it *receives* —
+  # so the pong sent from here is the thing that actually keeps the connection
+  # alive. Ignoring pings meant a client watching a stationary machine was
+  # disconnected after a minute, which is how this was found.
+  defp control(session, decoded) do
+    case Enum.find(decoded, &match?({:close, _, _}, &1)) do
+      {:close, code, reason} ->
+        {:error, {:closed, code, reason}}
+
+      nil ->
+        session =
+          Enum.reduce(decoded, session, fn
+            {:ping, payload}, session -> pong(session, payload)
+            _frame, session -> session
+          end)
+
+        {:ok, session, for({:text, text} <- decoded, do: :json.decode(text))}
+    end
+  end
+
+  defp pong(session, payload) do
+    with {:ok, websocket, data} <- Mint.WebSocket.encode(session.websocket, {:pong, payload}),
+         {:ok, conn} <- Mint.WebSocket.stream_request_body(session.conn, session.ref, data) do
+      %{session | conn: conn, websocket: websocket}
+    else
+      # A pong we could not send is not worth failing a read over: the next
+      # ping will try again, and if the link really is gone the read that
+      # follows will say so.
+      _ -> session
     end
   end
 

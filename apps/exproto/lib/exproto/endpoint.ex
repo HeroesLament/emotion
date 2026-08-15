@@ -94,7 +94,9 @@ defmodule ExProto.Endpoint do
     %{
       table: Keyword.fetch!(opts, :table),
       source: Keyword.fetch!(opts, :source),
-      fingerprint: fingerprint
+      fingerprint: fingerprint,
+      idle_timeout: Keyword.get(opts, :idle_timeout, 60_000),
+      keepalive_ms: Keyword.get(opts, :keepalive_ms)
     }
   end
 

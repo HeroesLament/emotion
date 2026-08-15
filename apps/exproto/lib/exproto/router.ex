@@ -37,9 +37,13 @@ defmodule ExProto.Router do
           %{
             table: conn.assigns.opts.table,
             source: conn.assigns.opts.source,
-            principal: principal
+            principal: principal,
+            keepalive_ms: Map.get(conn.assigns.opts, :keepalive_ms)
           },
-          timeout: 60_000
+          # The socket pings well inside this; see ExProto.Socket. Configurable
+          # so a test can prove the keepalive works in seconds rather than
+          # sitting out a real minute.
+          timeout: Map.get(conn.assigns.opts, :idle_timeout, 60_000)
         )
         |> halt()
 

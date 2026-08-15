@@ -18,6 +18,24 @@ defmodule ExProto.Socket do
   That keeps the effect at the edge, where it can be seen, rather than hiding a
   process call inside a function that claims to be a fold over a request.
 
+  ## Keepalive
+
+  The listener closes a connection that has been silent for 60 seconds, and a
+  conflating subscription is silent by design: only changed values are sent, so
+  a parked arm produces no traffic at all. The two together dropped the link
+  after a minute of stillness — which is most of the time, since watching a
+  stationary machine is the normal state of a studio.
+
+  So the server pings every 20 seconds. RFC 6455 ping/pong rather than a
+  JSON-RPC heartbeat, because the timeout being defended against is a property
+  of the socket rather than of the protocol, and because a heartbeat
+  notification would put a lie in the subscription stream — a frame that says
+  nothing changed, on a channel whose contract is that it only speaks when
+  something did.
+
+  Twenty seconds gives three chances to answer before the timeout, which
+  matters on a link slow enough to be worth keeping alive in the first place.
+
   ## Backpressure
 
   Notifications arrive as messages and are pushed straight out. The socket does
@@ -34,17 +52,24 @@ defmodule ExProto.Socket do
   alias ExProto.{Dispatch, Session}
   alias ExProto.Publisher.Server, as: Publisher
 
+  # Comfortably under the listener's 60s idle timeout — see ExProto.Router.
+  @keepalive_ms 20_000
+
   @impl WebSock
   def init(opts) do
     {:ok, publisher} =
       Publisher.start_link(owner: self(), source: opts.source, clock: :internal)
+
+    keepalive_ms = Map.get(opts, :keepalive_ms) || @keepalive_ms
+    schedule_keepalive(keepalive_ms)
 
     {:ok,
      %{
        session:
          Session.new(table: opts.table, source: opts.source, principal: opts.principal),
        publisher: publisher,
-       known: MapSet.new()
+       known: MapSet.new(),
+       keepalive_ms: keepalive_ms
      }}
   end
 
@@ -69,6 +94,11 @@ defmodule ExProto.Socket do
   end
 
   @impl WebSock
+  def handle_info(:keepalive, state) do
+    schedule_keepalive(state.keepalive_ms)
+    {:push, {:ping, ""}, state}
+  end
+
   def handle_info({:notify, notification}, state) do
     {:push, {:text, encode(notification)}, state}
   end
@@ -83,7 +113,18 @@ defmodule ExProto.Socket do
     :ok
   end
 
+  # A pong resets the listener's idle timer, because that timer measures time
+  # since data was *received*. Our own ping does not reset it; the client's
+  # answer does. Which is why the client half of this matters as much as this
+  # half — see ExLink.stream/2.
+  @impl WebSock
+  def handle_control({_payload, opcode: :pong}, state), do: {:ok, state}
+  def handle_control({_payload, opcode: :ping}, state), do: {:ok, state}
+  def handle_control(_frame, state), do: {:ok, state}
+
   # ── Internals ─────────────────────────────────────────────────────────────
+
+  defp schedule_keepalive(interval), do: Process.send_after(self(), :keepalive, interval)
 
   defp put_session(state, session), do: %{state | session: session}
 
