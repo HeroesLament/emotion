@@ -54,10 +54,11 @@ defmodule ExMo.Projection.JSONRPCTest do
     test "browse returns direct children in declaration order", %{table: table} do
       names = table |> JSONRPC.children("axes") |> Elixir.Enum.map(& &1.name)
 
-      # The joints in order, then the point at the end of them. A pendant draws
-      # this list top to bottom, so J3 appearing above J2 would be a real bug
-      # rather than a cosmetic one.
-      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP)
+      # The joints in order, then the point at the end of them, then the one
+      # command that moves all six at once. A pendant draws this list top to
+      # bottom, so J3 appearing above J2 would be a real bug rather than a
+      # cosmetic one.
+      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP JogCartesian)
     end
   end
 
@@ -98,6 +99,27 @@ defmodule ExMo.Projection.JSONRPCTest do
 
       assert table.nodes["axes.tcp.x"].unit == "m"
       assert table.nodes["axes.tcp.rx"].unit == "rad"
+    end
+
+    test "the Cartesian jog is held, and held on the object above the joints", %{table: table} do
+      node = table.nodes["axes.jog_cartesian"]
+
+      assert node.class == :method
+      assert node.call_grant == :jog
+
+      # Held rather than invoked, which is what ExProto.Jog looks for.
+      assert ExMo.Schema.Method.watchdog?(node)
+
+      # And held on `axes`, so the hold covers every joint under it. One
+      # assertion moves six joints; six holds with six deadlines would mean one
+      # lapsing stops one joint and leaves five running.
+      assert node.parent == "axes"
+
+      names = Elixir.Enum.map(node.params, & &1.name)
+      assert "axis" in names
+      # The neutral value the watchdog asserts on the caller's behalf when the
+      # assertions stop. A method with no `velocity` has nothing to zero.
+      assert "velocity" in names
     end
 
     test "each axis carries the standard property set", %{table: table} do

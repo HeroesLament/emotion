@@ -7,7 +7,7 @@ defmodule ExMo.Schema.Registry do
   printer/drive fragments, etc. For now it's explicit and inspectable.
   """
 
-  alias ExMo.Schema.{Model, Object, Property, Enum, FromAxis, FromBehavior}
+  alias ExMo.Schema.{Argument, Model, Object, Property, Enum, Method, FromAxis, FromBehavior}
   alias ExMo.Behaviors.K1C.RemovePreviousPrint
 
   @doc "Returns the uncompiled root model with all registered fragments."
@@ -161,7 +161,81 @@ defmodule ExMo.Schema.Registry do
       description:
         "The arm: its joints, and the tool centre point they place. Positions " <>
           "in radians, velocities in rad/s, the tool in metres.",
-      children:    Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1) ++ [tcp_object()]
+      children:
+        Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1) ++
+          [tcp_object(), cartesian_jog()]
+    }
+  end
+
+  # ── Cartesian jog ─────────────────────────────────────────────────────────
+
+  # Held, like the per-axis jog, and held on THIS object — which is what makes
+  # it safe. One Cartesian assertion moves six joints, so it has to be one hold
+  # with one deadline: six per-axis holds would mean one of them lapsing stops
+  # one joint and leaves five running, which is worse than either stopping or
+  # not stopping. `ExProto.Jog` keys the hold on the method's parent and treats
+  # a hold as covering everything beneath it, so holding this locks every joint
+  # under `axes` against another session.
+  #
+  # One direction at a time, not a six-vector twist. A pendant has buttons and
+  # an operator presses one; more importantly, the watchdog contract is that a
+  # held method takes a `velocity` whose neutral value is zero, and a twist
+  # vector has no single number to zero. Diagonal motion is a program, not a
+  # jog.
+  defp cartesian_jog do
+    bounds = Method.watchdog_deadline_ms()
+
+    %Method{
+      id: "axes.jog_cartesian",
+      name: "JogCartesian",
+      description:
+        "Move the tool centre point along or about one base axis, for as long " <>
+          "as the client keeps saying so. Held exactly like a joint jog: " <>
+          "re-send at around 10 Hz, and the controller commands zero as soon " <>
+          "as assertions stop arriving. Solved per assertion from the current " <>
+          "joint pose, so the arm stays on the configuration it is already in " <>
+          "rather than flipping elbow or wrist mid-move. Refused near a " <>
+          "singularity rather than obeyed: the joint rates that would hold a " <>
+          "constant tool speed there are not rates anybody asked for.",
+      async: true,
+      call_grant: :jog,
+      meta: %{watchdog: true},
+      input_args: [
+        %Argument{
+          name: "axis",
+          type: :string,
+          required: true,
+          description:
+            "Which direction to move in: x | y | z for translation, rx | ry | " <>
+              "rz for rotation. Base frame — tool and user frames are not " <>
+              "implemented and are refused rather than quietly treated as base."
+        },
+        %Argument{
+          name: "velocity",
+          type: :double,
+          required: true,
+          description:
+            "Signed tool speed, m/s for a translation and rad/s for a " <>
+              "rotation. Zero is the neutral assertion."
+        },
+        %Argument{
+          name: "frame",
+          type: :string,
+          required: false,
+          default: "base",
+          description: "Only `base` for now. Anything else is refused."
+        },
+        %Argument{
+          name: "deadlineMs",
+          type: :uint16,
+          required: false,
+          default: bounds.default,
+          description:
+            "How long this assertion stands. Clamped to " <>
+              "#{bounds.min}..#{bounds.max} ms; read the granted value from " <>
+              "the acceptance."
+        }
+      ]
     }
   end
 

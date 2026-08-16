@@ -938,6 +938,57 @@ defmodule ExProto.DispatchTest do
       assert ExProto.Jog.holder("axes.j1", context.jog) == :none
     end
 
+    test "a Cartesian hold locks every joint under it", context do
+      # The whole design, end to end. One held command on `axes` moves six
+      # joints, so a second session must not be able to take one of them by
+      # naming the joint — it would be commanding a joint the first session is
+      # already turning through the tool.
+      arm = held_session(:operator, context)
+
+      {:reply, accepted, _} =
+        call(
+          arm,
+          "nodes/call",
+          %{
+            "nodeId" => "axes.jog_cartesian",
+            "arguments" => %{"axis" => "z", "velocity" => 0.05}
+          },
+          2
+        )
+
+      assert accepted["result"]["accepted"] == true
+      assert accepted["result"]["deadlineMs"] == ExMo.Schema.Method.watchdog_deadline_ms().default
+      assert ExProto.Jog.holder("axes", context.jog) == {:ok, self()}
+
+      joint = held_session(:operator, context)
+
+      response =
+        Task.async(fn ->
+          {:reply, response, _} = jog(joint, 0.1)
+          response
+        end)
+        |> Task.await()
+
+      assert response["error"]["code"] == Nodes.error_codes().node_held
+    end
+
+    test "the Cartesian jog reaches the source with its direction", %{source: source} = context do
+      session = held_session(:operator, context)
+
+      {:reply, _, _} =
+        call(
+          session,
+          "nodes/call",
+          %{
+            "nodeId" => "axes.jog_cartesian",
+            "arguments" => %{"axis" => "rz", "velocity" => 0.2}
+          },
+          2
+        )
+
+      assert [{"axes.jog_cartesian", %{"axis" => "rz", "velocity" => 0.2}}] = Static.calls(source)
+    end
+
     test "with no watchdog running, a jog is refused rather than started", context do
       session = held_session(:operator, %{context | jog: :jog_never_started})
 

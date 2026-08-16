@@ -37,7 +37,7 @@ defmodule ExProto.Source.Exdrive do
   require Logger
 
   alias ExMo.Schema.Registry
-  alias ExMove.{FK, JointState}
+  alias ExMove.{FK, IK, JointState}
 
   # CiA 402 states in which the drive accepts a setpoint. Everything else
   # discards it; see Exdrive.Drive.
@@ -152,6 +152,8 @@ defmodule ExProto.Source.Exdrive do
   # ── Commands ──────────────────────────────────────────────────────────────
 
   @impl ExProto.Source
+  def call("axes.jog_cartesian", args, _arg), do: jog_cartesian(args)
+
   def call(node_id, args, _arg) do
     case parse(node_id) do
       {:ok, axis, command} -> command(axis, command, args)
@@ -228,6 +230,101 @@ defmodule ExProto.Source.Exdrive do
     {:ok, Exdrive.Drive.set_mode(axis, mode)}
   catch
     :exit, _reason -> {:error, :rejected}
+  end
+
+  # ── Cartesian jog ─────────────────────────────────────────────────────────
+
+  # Six joint velocities from one tool velocity, per assertion.
+  #
+  # Seeded with where the arm is right now and nowhere else. Velocity IK is
+  # differential — it answers "how should the joints move from here" — which is
+  # exactly the property a jog needs: the arm stays on the configuration it is
+  # already in, and cannot flip elbow-up to elbow-down halfway through a move
+  # because a different solution scored better. That flip is a collision, and
+  # it is the reason a Cartesian jog is not "solve for a pose and go there".
+  defp jog_cartesian(args) do
+    with {:ok, "base"} <- frame(args),
+         {:ok, twist} <- twist(args),
+         chain = Registry.arm_chain(),
+         {:ok, positions} <- joint_positions(chain),
+         :ok <- all_enabled(chain),
+         {:ok, %JointState{velocities: dq}} <-
+           IK.solve_velocity(chain, %JointState{positions: positions}, twist) do
+      apply_joint_velocities(chain, scale(dq))
+      :ok
+    else
+      # Not obeyed, and not silently approximated either. Near a singularity the
+      # joint rates that would hold a constant tool speed go to infinity, and
+      # the damped solve that avoids dividing by zero produces rates nobody
+      # asked for. Refusing puts the operator back on joint jog, which is the
+      # only way out of a singularity anyway.
+      {:error, :singular} -> {:error, :rejected}
+      {:error, reason} -> {:error, reason}
+      {:ok, _other_frame} -> {:error, :rejected}
+    end
+  end
+
+  defp frame(args) do
+    case Map.get(args, "frame") || "base" do
+      "base" -> {:ok, "base"}
+      other -> {:ok, other}
+    end
+  end
+
+  # One direction, in the slot the Jacobian expects: [vx, vy, vz, wx, wy, wz].
+  defp twist(args) do
+    with {:ok, velocity} <- as_float(args["velocity"]) do
+      case args["axis"] do
+        "x" -> {:ok, [velocity, 0.0, 0.0, 0.0, 0.0, 0.0]}
+        "y" -> {:ok, [0.0, velocity, 0.0, 0.0, 0.0, 0.0]}
+        "z" -> {:ok, [0.0, 0.0, velocity, 0.0, 0.0, 0.0]}
+        "rx" -> {:ok, [0.0, 0.0, 0.0, velocity, 0.0, 0.0]}
+        "ry" -> {:ok, [0.0, 0.0, 0.0, 0.0, velocity, 0.0]}
+        "rz" -> {:ok, [0.0, 0.0, 0.0, 0.0, 0.0, velocity]}
+        _unknown -> {:error, :rejected}
+      end
+    end
+  end
+
+  # Every joint scaled by the same factor, not each clamped to the limit.
+  #
+  # Clamping per joint changes the ratios between them, and the ratios are the
+  # direction: an arm whose fastest joint is clipped and whose others are not
+  # travels somewhere other than where the operator pointed, slowly and
+  # confidently. Scaling the whole vector keeps the tool on the commanded line
+  # and just makes it slower, which is what "too fast" should mean.
+  defp scale(dq) do
+    peak = dq |> Enum.map(&abs/1) |> Enum.max()
+
+    if peak > @max_jog_velocity do
+      factor = @max_jog_velocity / peak
+      Enum.map(dq, &(&1 * factor))
+    else
+      dq
+    end
+  end
+
+  defp all_enabled(chain) do
+    Enum.reduce_while(chain.axis_ids, :ok, fn axis_id, :ok ->
+      case status(Atom.to_string(axis_id)) do
+        {:ok, %{state: :operation_enabled}} -> {:cont, :ok}
+        {:ok, _not_enabled} -> {:halt, {:error, :rejected}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp apply_joint_velocities(chain, velocities) do
+    chain.axis_ids
+    |> Enum.zip(velocities)
+    |> Enum.each(fn {axis_id, velocity} ->
+      axis = Atom.to_string(axis_id)
+
+      with {:ok, status} <- status(axis),
+           {:ok, _mode} <- ensure_velocity_mode(axis, status) do
+        Exdrive.Drive.set_target_velocity(axis, velocity)
+      end
+    end)
   end
 
   # ── Projection: drive status → model nodes ────────────────────────────────

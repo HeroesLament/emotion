@@ -8,7 +8,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       mix exmo.rpc read <nodeId> [nodeId...]
       mix exmo.rpc write <nodeId> <value>
       mix exmo.rpc call <nodeId>
-      mix exmo.rpc jog <nodeId> <velocity> [--for 3]
+      mix exmo.rpc jog <nodeId> <velocity> [--for 3] [--axis z]
       mix exmo.rpc watch <nodeId> [nodeId...] [--rate 5] [--for 10]
 
   Options: `--host` (localhost), `--port` (4001), `--user`, `--insecure`.
@@ -48,7 +48,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
 
     {opts, args, _} =
       OptionParser.parse(argv,
-        strict: [host: :string, port: :integer, user: :string, rate: :float, for: :integer, insecure: :boolean]
+        strict: [host: :string, port: :integer, user: :string, rate: :float, for: :integer, axis: :string, insecure: :boolean]
       )
 
     host = Keyword.get(opts, :host, "localhost")
@@ -255,7 +255,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
 
     Mix.shell().info("\n  holding #{node_id} at #{velocity} for #{seconds}s, asserting at 10 Hz")
 
-    case hold(session, node_id, velocity, until, nil) do
+    case hold(session, node_id, velocity, until, nil, opts) do
       {:ok, session, granted} ->
         Mix.shell().info("""
 
@@ -263,23 +263,33 @@ defmodule Mix.Tasks.Exmo.Rpc do
           #{granted}ms of authority and the controller is on its own now.
         """)
 
-        settle(session, parent(node_id), 6)
+        settle(session, watched(node_id), 6)
 
       {:error, message} ->
         Mix.shell().error("  #{message}")
     end
   end
 
-  defp hold(session, node_id, velocity, until, granted) do
+  defp hold(session, node_id, velocity, until, granted, opts \\ []) do
     if System.monotonic_time(:millisecond) >= until do
       {:ok, session, granted}
     else
-      params = %{"nodeId" => node_id, "arguments" => %{"velocity" => velocity}}
+      # `--axis` is what a Cartesian jog needs and a joint jog has no use for:
+      # `axes.j1.jog` is already the axis, `axes.jog_cartesian` has six to
+      # choose between. Omitted rather than defaulted, so a joint jog does not
+      # start carrying an argument that means nothing to it.
+      arguments =
+        case Keyword.get(opts, :axis) do
+          nil -> %{"velocity" => velocity}
+          axis -> %{"velocity" => velocity, "axis" => axis}
+        end
+
+      params = %{"nodeId" => node_id, "arguments" => arguments}
 
       case Client.request(session, "nodes/call", params) do
         {:ok, session, %{"result" => result}} ->
           Process.sleep(100)
-          hold(session, node_id, velocity, until, result["deadlineMs"])
+          hold(session, node_id, velocity, until, result["deadlineMs"], opts)
 
         {:ok, _session, %{"error" => error}} ->
           {:error, "#{error["message"]} (#{error["code"]})"}
@@ -289,10 +299,26 @@ defmodule Mix.Tasks.Exmo.Rpc do
 
   # Reads the axis every 150ms after the assertions stop. A jog that had to be
   # stopped by the client would show a velocity that never changes.
-  defp settle(_session, _axis, 0), do: Mix.shell().info("")
+  # What to watch after letting go. A joint jog settles on its own velocity and
+  # state; a Cartesian jog has neither — six joints do, and what the operator
+  # was actually commanding was the tool, so that is what should be seen coming
+  # to rest.
+  defp watched(node_id) do
+    if String.ends_with?(node_id, ".jog_cartesian") do
+      {:tcp, parent(node_id)}
+    else
+      {:axis, parent(node_id)}
+    end
+  end
 
-  defp settle(session, axis, remaining) do
-    ids = ["#{axis}.velocity", "#{axis}.state"]
+  defp settle(_session, _watched, 0), do: Mix.shell().info("")
+
+  defp settle(session, watched, remaining) do
+    ids =
+      case watched do
+        {:tcp, prefix} -> ["#{prefix}.tcp.x", "#{prefix}.tcp.y", "#{prefix}.tcp.z"]
+        {:axis, axis} -> ["#{axis}.velocity", "#{axis}.state"]
+      end
 
     case Client.request(session, "nodes/read", %{"nodeIds" => ids}) do
       {:ok, session, %{"result" => result}} ->
@@ -303,7 +329,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
 
         Mix.shell().info("  #{line}")
         Process.sleep(150)
-        settle(session, axis, remaining - 1)
+        settle(session, watched, remaining - 1)
 
       {:ok, _session, %{"error" => error}} ->
         Mix.shell().error("  #{error["message"]}")
