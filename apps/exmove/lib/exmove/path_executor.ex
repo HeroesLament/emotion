@@ -3,7 +3,7 @@ defmodule ExMove.PathExecutor do
   Servo-rate path executor.
 
   Consumes a stream of `%ExMove.Frame{}` waypoints at 1kHz, converting each
-  to joint velocities via `ExMove.IK.solve_velocity/3` and dispatching them
+  to joint velocities via `ExMove.IK.solve_velocity/4` and dispatching them
   via an injected push function.
 
   PathExecutor has no knowledge of Robot, drives, or hardware. All I/O is
@@ -210,7 +210,11 @@ defmodule ExMove.PathExecutor do
           tcp_vel = differentiate(frame, prev)
 
           case IK.solve_velocity(state.chain, state.current_js, tcp_vel) do
-            {:ok, vel_js} ->
+            # The report is dropped here rather than acted on: this executor
+            # predates it and does its own scaling below. When path execution
+            # moves onto the stream's machinery it inherits the residual and the
+            # damping ladder with it.
+            {:ok, vel_js, _report} ->
               {scaled, scale} = scale_to_limits(state.chain, vel_js.velocities)
 
               # Apply lookahead ceiling — already factored into budget gate above,

@@ -4,7 +4,7 @@ defmodule ExMove.Path do
 
   Produces lazy streams of `%ExMove.Frame{}` waypoints parameterised by
   arc-length. The consumer pulls one frame per servo tick and feeds it to
-  `ExMove.IK.solve_velocity/3` to get joint velocities.
+  `ExMove.IK.solve_velocity/4` to get joint velocities.
 
   Feedrate is in mm/s. Tick rate (hz) defaults to 1000 (1kHz).
 

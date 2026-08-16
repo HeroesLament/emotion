@@ -69,7 +69,7 @@ defmodule ExMove.JacobianTest do
       q = [0.0, 0.6, -1.2, 0.0, 0.7, 0.0]
       commanded = [0.0, 0.0, 0.05, 0.0, 0.0, 0.0]
 
-      {:ok, %JointState{velocities: dq}} =
+      {:ok, %JointState{velocities: dq}, _report} =
         IK.solve_velocity(chain, JointState.from_positions(q), commanded)
 
       # Where FK says the tool goes when the joints move at dq.

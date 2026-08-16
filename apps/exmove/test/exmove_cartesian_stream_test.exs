@@ -155,6 +155,81 @@ defmodule ExMove.CartesianStreamTest do
     end
   end
 
+  describe "limiting and refusing" do
+    test "reports the fraction it is actually moving at", ctx do
+      %{chain: chain} = ctx
+
+      # Extended nearly straight, where a modest tool speed asks for joint rates
+      # the ceiling will not allow. The tool stays on the commanded line; only
+      # the speed gives way.
+      extend(ctx, [0.0, 0.6, -0.05, 0.0, 0.7, 0.0])
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      step(ctx, 200)
+
+      assert {:limited, fraction} = CartesianStream.status(chain.name)
+      assert fraction > 0.0 and fraction < 1.0
+    end
+
+    test "an unlimited jog says so rather than saying nothing", ctx do
+      %{chain: chain} = ctx
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == :tracking
+    end
+
+    test "refuses and stops when the achievable speed collapses", ctx do
+      %{chain: chain, axis_ids: axis_ids} = ctx
+
+      # Close enough to full extension that the fraction falls under the floor.
+      extend(ctx, [0.0, 0.6, -0.002, 0.0, 0.7, 0.0])
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == {:refused, :singular}
+
+      # Zero written, not nothing written. An arm that has run out of arm should
+      # stop, rather than coast on its last setpoint until the hold lapses.
+      for axis_id <- axis_ids do
+        assert Exdrive.Drive.status(axis_id).target_velocity == 0.0,
+               "#{axis_id} kept its setpoint through a refusal"
+      end
+    end
+
+    test "a refusal is not permanent — backing off resumes", ctx do
+      %{chain: chain} = ctx
+
+      extend(ctx, [0.0, 0.6, -0.002, 0.0, 0.7, 0.0])
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      step(ctx, 200)
+      assert CartesianStream.status(chain.name) == {:refused, :singular}
+
+      # The stream is still running and still holding the intent. A refusal is a
+      # statement about this tick, not a latched fault an operator has to clear —
+      # the arm has not done anything wrong by being where it is.
+      extend(ctx, [0.0, 0.6, -1.2, 0.0, 0.7, 0.0])
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == :tracking
+    end
+
+    test "a jog through a wrist singularity is not refused", ctx do
+      %{chain: chain} = ctx
+
+      # Manipulability is exactly zero here. A policy keyed on it would stop the
+      # arm; the command is a translation and the wrist was never carrying it.
+      extend(ctx, [0.0, 0.6, -1.2, 0.0, 0.0, 0.0])
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == :tracking
+    end
+  end
+
   # ── Helpers ───────────────────────────────────────────────────────────────
 
   defp assert_straight(ctx, speed, hz, tolerance_mm) do
@@ -207,6 +282,21 @@ defmodule ExMove.CartesianStreamTest do
     _ = chain
   end
 
+  # Put the arm at an arbitrary pose. Same mechanism as the reset in setup, and
+  # separate from it because these cases need poses the straightness tests would
+  # never choose.
+  defp extend(%{axis_ids: axis_ids}, target) do
+    for {axis_id, q} <- Enum.zip(axis_ids, target) do
+      Exdrive.Drive.set_mode(axis_id, :profile_position)
+      Exdrive.Drive.set_target_position(axis_id, q)
+    end
+
+    for _ <- 1..300, axis_id <- axis_ids, do: Exdrive.Drive.tick(axis_id, 0.01)
+
+    for axis_id <- axis_ids, do: Exdrive.Drive.set_mode(axis_id, :profile_velocity)
+    :ok
+  end
+
   defp run(ctx, hz, seconds) do
     for _ <- 1..round(hz * seconds), do: step(ctx, hz)
   end
@@ -216,7 +306,10 @@ defmodule ExMove.CartesianStreamTest do
   # clock would produce.
   defp step(%{chain: chain, axis_ids: axis_ids}, hz) do
     dt = 1.0 / hz
-    {:ok, _dq} = CartesianStream.tick(chain.name, dt)
+    # Not asserted on: a tick that refuses is a legitimate outcome and the
+    # limiting tests below are about exactly that. What the tick did is read from
+    # the status, which is the thing a client sees too.
+    _ = CartesianStream.tick(chain.name, dt)
     for axis_id <- axis_ids, do: Exdrive.Drive.tick(axis_id, dt)
   end
 

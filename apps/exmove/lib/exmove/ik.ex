@@ -110,51 +110,176 @@ defmodule ExMove.IK do
     %{linear: linear, angular: angular, flat: flat, n: n}
   end
 
+  # Damping for velocity IK.
+  #
+  # Not a guard, and deliberately not tunable. It is the smallest number that
+  # keeps the 6×6 elimination well posed at an exact singularity, where JJᵀ is
+  # rank deficient and would otherwise divide by zero.
+  #
+  # A larger λ is the textbook answer to unbounded joint rates near a
+  # singularity, and it is the wrong one here. Damping bounds the rates by
+  # bending the answer away from what was asked for — measured on this arm,
+  # damping a 1.19 rad/s solve down to 0.5 rad/s costs half the commanded twist.
+  # Scaling the whole joint vector meets the same ceiling with the direction
+  # exactly preserved and the speed reduced instead. Speed is the cheaper thing
+  # to lose, and it is the one an operator can see. See `ExMove.CartesianStream`,
+  # which owns that policy because it is policy.
+  @velocity_lambda 1.0e-6
+
   @doc """
-  Velocity IK — given current joint state and desired TCP velocity vector,
-  return the joint velocities that produce it.
+  Velocity IK — given current joint state and a desired TCP velocity, return the
+  joint velocities that produce it.
 
-  `tcp_vel` is a 6-vector `[vx, vy, vz, wx, wy, wz]` in m/s and rad/s.
-  Returns `{:ok, %JointState{velocities: [...]}}` or `{:error, :singular}`.
+  `tcp_vel` is a 6-vector `[vx, vy, vz, wx, wy, wz]` in m/s and rad/s. Returns
+  `{:ok, %JointState{velocities: [...]}, report}`, or `{:error, :singular}` when
+  even the damped system cannot be solved.
 
-  This is the hot path for feedrate-maintaining Cartesian motion.
-  Much cheaper than the iterative position solver — one matrix multiply.
+  This is pure kinematics and applies no policy. It does not limit the rates it
+  returns, and near a singularity they can be very large — that is the honest
+  answer to the question asked, and what to do about it belongs to whoever owns
+  the drives.
+
+  ## The report
+
+    * `:manipulability` — `sqrt(det(J·Jᵀ))`. Zero at a singularity.
+    * `:residual` — `|J·dq − v| / |v|`, the fraction of the commanded twist the
+      joints fail to deliver. Zero wherever the command is achievable at all,
+      which is almost everywhere; it rises only where the arm genuinely cannot go
+      in the direction asked.
+    * `:peak_rate` — the largest joint rate in the answer, rad/s.
+
+  ## Why the residual is the interesting number and not the manipulability
+
+  Measured on a six-axis arm, approaching full extension drops `w` and sends the
+  joint rates for a 0.05 m/s translation from 0.2 rad/s to 128 rad/s. Approaching
+  the wrist singularity drops `w` exactly as far and does not move those rates at
+  all: the freedom being lost is a wrist rotation, and a translation never needed
+  it.
+
+  So `w` cannot tell "this arm is stuck" from "this arm is in an awkward pose and
+  perfectly able to do what you asked". It is a property of the pose. The
+  residual is a property of the pose *and the command*, which is the pair the
+  question is actually about. `w` is still reported — it is the standard number
+  and it is what a viewport shades reachability with — but nothing keys off it.
   """
-  def solve_velocity(%Chain{} = chain, %JointState{} = js, tcp_vel)
+  def solve_velocity(%Chain{} = chain, %JointState{} = js, tcp_vel, _opts \\ [])
       when length(tcp_vel) == 6 do
     %{flat: jac, n: n} = jacobian(chain, js)
-    case dls_velocity(jac, tcp_vel, n) do
+
+    a = jjt(jac, n)
+
+    case dls_velocity(a, jac, tcp_vel, n, @velocity_lambda) do
       {:ok, dq} ->
-        {:ok, %JointState{js | velocities: dq}}
+        report = %{
+          manipulability: :math.sqrt(abs(determinant(a))),
+          residual: residual(jac, dq, tcp_vel, n),
+          peak_rate: peak(dq)
+        }
+
+        {:ok, %JointState{js | velocities: dq}, report}
+
       :singular ->
         {:error, :singular}
     end
   end
 
-  # DLS pseudoinverse for velocity IK: dq = Jᵀ(JJᵀ + λ²I)⁻¹ v
-  # Uses a very small λ — just enough to prevent divide-by-zero at singularities.
-  # Caller should check κ before calling if singularity handling matters.
-  @velocity_lambda 1.0e-6
-  defp dls_velocity(jac, v, n) do
-    lambda2 = @velocity_lambda * @velocity_lambda
-    # JJᵀ (6×6) + λ²I
-    a = for i <- 0..5 do
-      for j <- 0..5 do
-        s = Enum.reduce(0..(n-1), 0.0, fn k, acc ->
-          acc + Enum.at(jac, i*n+k) * Enum.at(jac, j*n+k)
-        end)
-        if i == j, do: s + lambda2, else: s
-      end
-    end
-    # Jᵀ · (A⁻¹ · v) — Gaussian elimination on 6×6 augmented [A|v]
-    case gaussian_solve(a, v) do
-      {:ok, av} ->
-        dq = for k <- 0..(n-1) do
-          Enum.reduce(0..5, 0.0, fn i, acc ->
-            acc + Enum.at(jac, i*n+k) * Enum.at(av, i)
+  defp peak([]), do: 0.0
+  defp peak(dq), do: dq |> Enum.map(&abs/1) |> Enum.max()
+
+  # How much of the commanded twist the joints do not deliver, as a fraction.
+  #
+  # This is the number a refusal belongs on. Unlike the manipulability it knows
+  # what was asked for, so it stays at zero through a singularity whose lost
+  # degree of freedom the command never needed.
+  defp residual(jac, dq, v, n) do
+    norm_v = v |> Enum.map(&(&1 * &1)) |> Enum.sum() |> :math.sqrt()
+
+    if norm_v < 1.0e-12 do
+      0.0
+    else
+      achieved =
+        for i <- 0..5 do
+          Enum.reduce(0..(n - 1), 0.0, fn k, acc ->
+            acc + Enum.at(jac, i * n + k) * Enum.at(dq, k)
           end)
         end
+
+      Enum.zip(achieved, v)
+      |> Enum.map(fn {a, b} -> (a - b) * (a - b) end)
+      |> Enum.sum()
+      |> :math.sqrt()
+      |> Kernel./(norm_v)
+    end
+  end
+
+  # J·Jᵀ, 6×6. Built once and used for both the determinant and the solve.
+  defp jjt(jac, n) do
+    for i <- 0..5 do
+      for j <- 0..5 do
+        Enum.reduce(0..(n - 1), 0.0, fn k, acc ->
+          acc + Enum.at(jac, i * n + k) * Enum.at(jac, j * n + k)
+        end)
+      end
+    end
+  end
+
+  # Product of the pivots, with the sign of the row swaps. Zero at a singularity,
+  # which is the answer rather than a failure.
+  defp determinant(a) do
+    Enum.reduce_while(0..5, {a, 1.0}, fn col, {rows, acc} ->
+      {pivot_row, magnitude} =
+        rows
+        |> Enum.drop(col)
+        |> Enum.with_index(col)
+        |> Enum.max_by(fn {row, _i} -> abs(Enum.at(row, col)) end)
+        |> then(fn {row, i} -> {i, abs(Enum.at(row, col))} end)
+
+      if magnitude < 1.0e-15 do
+        {:halt, {rows, 0.0}}
+      else
+        sign = if pivot_row == col, do: 1.0, else: -1.0
+        rows = swap_rows(rows, col, pivot_row)
+        p = Enum.at(rows, col)
+        pivot = Enum.at(p, col)
+
+        rows =
+          rows
+          |> Enum.with_index()
+          |> Enum.map(fn {row, i} ->
+            if i > col do
+              f = Enum.at(row, col) / pivot
+              Enum.zip(row, p) |> Enum.map(fn {rv, pv} -> rv - f * pv end)
+            else
+              row
+            end
+          end)
+
+        {:cont, {rows, acc * pivot * sign}}
+      end
+    end)
+    |> elem(1)
+  end
+
+  # DLS pseudoinverse for velocity IK: dq = Jᵀ(JJᵀ + λ²I)⁻¹ v
+  defp dls_velocity(a, jac, v, n, lambda) do
+    lambda2 = lambda * lambda
+
+    damped =
+      a
+      |> Enum.with_index()
+      |> Enum.map(fn {row, i} -> List.update_at(row, i, &(&1 + lambda2)) end)
+
+    case gaussian_solve(damped, v) do
+      {:ok, av} ->
+        dq =
+          for k <- 0..(n - 1) do
+            Enum.reduce(0..5, 0.0, fn i, acc ->
+              acc + Enum.at(jac, i * n + k) * Enum.at(av, i)
+            end)
+          end
+
         {:ok, dq}
+
       :singular ->
         :singular
     end
