@@ -34,36 +34,64 @@ does not share is the classic wrong-place bug. Underneath all of it, the same
 command from a pendant, from Studio and from a stored program has to move the
 arm identically, which it cannot if only one of the three has a solver.
 
-## 1. The interpolator (the defect we measured)
+## 1. The interpolator
 
-A jog assertion arrives at ~10 Hz. Today each one computes joint velocities
-once and the joints coast on them until the next assertion. That makes the
-*client's* rate the interpolation rate, and it does not work:
+This section previously said the 175mm we measured was chord error and that a
+faster interpolator would fix it. That was wrong, and how it was wrong is worth
+keeping.
 
-    tool speed 0.05 m/s  →  0.417 rad/s at shoulder and elbow
-    held for 100 ms      →  0.042 rad of joint travel per tick
+**What it actually was.** The Jacobian was built with every column pivoting
+about the previous joint's origin — one link too long on every lever arm. The
+joint rates it produced satisfied that Jacobian exactly, and moved the arm at
+0.175 m/s mostly sideways when 0.05 m/s in Z was asked for. Fixed in
+`e177d76`, with the check that was missing: every column against a finite
+difference of `FK.solve/2`.
 
-The Jacobian has changed meaningfully by the end of that tick, so each one
-walks a chord where the command asked for an arc. Chord error always falls to
-the inside of the curve, so it accumulates in one direction rather than
-cancelling. Measured: commanding +0.05 m/s in Z for two seconds gave the right
-Z and 175 mm of Y nobody asked for.
+The cheap discriminator, and the thing to reach for first next time: **run the
+same motion at several rates.** Chord error falls off with dt. A defect that
+reports 178.89mm at 10 Hz and 178.89mm at 1000 Hz is not an integration error,
+and one sweep would have said so before any of the reasoning above it was
+written. Rate invariance is a fingerprint.
 
-The solver is not at fault — `J·dq` equals the commanded twist to five decimal
-places. Nor is the drive ramp: 10 rad/s² against 0.4 rad/s is ~40 ms in a 2 s
-move.
+**What chord error actually costs**, measured after the fix, jogging +Z for two
+seconds from a bent pose and taking the worst lateral deviation:
 
-**Finished:** a `Exdrive.CartesianStream` process per arm. An assertion
-*refreshes the intent* — frame, direction, speed — and nothing else. The stream
-re-solves from the live joint pose at its own rate and writes joint velocity
-setpoints. The client's rate and the interpolation rate are decoupled: the
-watchdog guards the hold, the stream guards the path.
+    rate     0.05 m/s (jog)    0.25 m/s (ISO manual max)
+    10 Hz          0.346mm                      12.63mm
+    20 Hz          0.173mm                       6.69mm
+    50 Hz          0.069mm                       2.82mm
+    100 Hz         0.035mm                       1.44mm
+    200 Hz         0.017mm                       0.73mm
 
-Rate: the drives tick at 1 kHz, but each solve is a NIF Jacobian plus a 6×6
-elimination. 200 Hz gives 5 ms ticks — 0.002 rad of joint travel, two orders
-below the error we measured — and should be confirmed by measurement rather
-than assumed. `Exdrive.IpStream` is already almost this shape and is the thing
-to copy from.
+First order in dt, as expected, and roughly quadratic in speed — a chord's sagitta
+goes as the square of its length. At jog speed the client's 10 Hz is already
+inside the millimetre this document sets as the bar. At the speed the machine is
+actually allowed to run in manual, it is twelve times outside it.
+
+So the stream still earns its place, and 200 Hz still looks right — but for the
+speed at the top of the range rather than the one at the bottom, and that is the
+number to design to. Each `solve_velocity` costs 36.6µs measured, so 200 Hz is
+under 1% of a core per arm; the rate is not the constraint anyone thought it
+might be.
+
+The rest of the case for a stream never depended on the arithmetic at all, and
+is the stronger half:
+
+  * The watchdog should guard the hold and nothing else. A client's assertion
+    rate is a fact about the network; the interpolation rate is a fact about the
+    machine, and one should not be reading the other's value.
+  * Everything in sections 2, 4 and 6 — damping, joint-limit stops, the tool
+    speed limit — has to be evaluated on a clock the controller owns. There is
+    currently no such clock, which is why none of them exist.
+
+**Finished:** a `CartesianStream` process per arm. An assertion *refreshes the
+intent* — frame, direction, speed — and nothing else. The stream re-solves from
+the live joint pose at its own rate and writes joint velocity setpoints.
+
+It goes in `exmove`, not `exdrive`: `exmove` already depends on `exdrive`
+(`ExMove.Robot`, `ExMove.IpStream` and `ExMove.PathExecutor` all write setpoints
+through `Exdrive.Drive`), so a `Exdrive.CartesianStream` needing the solver would
+close a cycle. `ExMove.IpStream` is the shape to copy and is one directory away.
 
 The stream stops on an explicit zero, on the hold lapsing, or on its own death.
 The watchdog is unchanged: it still guards the hold, it just stops doubling as
@@ -108,6 +136,14 @@ Base only today. Finished:
   * `user` — named frames, stored on the controller as configuration because
     they are facts about the cell. Model nodes under `frames.<name>`, writable
     behind `write_configuration`.
+
+One gap sits underneath all three. The Jacobian NIF is handed the joints and
+nothing else, so the point it solves for is the tip of the last joint, not the
+tool centre point — the tool offset lives on the Elixir `Chain`. `ExMove.IK.solve/4`
+targets the same point, so the two agree with each other, and while the offset is
+identity they also agree with the arm. Fit a real tool and every Cartesian
+command is solved for the wrong point. The tool has to be plumbed into the NIF
+before `tool` frame means anything.
 
 Unknown frame names are refused rather than quietly treated as base. The four
 jog modes on any commercial pendant — JOINT, WORLD, TOOL, USER — are then one
@@ -181,8 +217,15 @@ document.
 The tests are the specification, and the first one is the one that would have
 caught what we shipped:
 
+  * **The Jacobian against FK.** Every column, finite-differenced, at several
+    bent poses. Done — `apps/exmove/test/exmove_jacobian_test.exs`. It is first
+    because it is the one that would have caught what shipped, and because it is
+    the only one that can: `J·dq == twist` compares J with itself, and every
+    test below runs *through* the Jacobian and so inherits whatever it says.
+
   * **Straightness.** Jog +Z for two seconds; assert maximum deviation from the
-    commanded line stays under a millimetre.
+    commanded line stays under a millimetre — at the manual speed limit, not at
+    jog speed, which is where the margin actually is.
   * **Speed.** `|Δp|/Δt` within a few percent of what was asked for.
   * **Singularity.** Approach one; assert damping engages, then refusal, and
     that no joint rate ever exceeds the ceiling on the way.
@@ -195,11 +238,14 @@ caught what we shipped:
 
 ## Order
 
-1. `CartesianStream` — fixes the defect that is measured and shipped.
-2. Straightness and speed tests, immediately after, so it stays fixed.
-3. Variable damping, κ floor, rate-limit reporting.
-4. Joint-limit stop.
-5. Tool frame, then user frames.
-6. Cartesian speed limit, then the mode interlock.
-7. `move_linear` / `move_arc` and the queue.
-8. Studio: Cartesian pendant, then the gizmo.
+1. ~~The Jacobian~~ — done, `e177d76`. It was the measured defect, and it
+   was not what this document first said it was.
+2. `CartesianStream` — needed for manual-speed accuracy, and needed before
+   anything in 3, 4 or 6 has a clock to run on.
+3. Straightness and speed tests, immediately after, so it stays fixed.
+4. Variable damping, κ floor, rate-limit reporting.
+5. Joint-limit stop.
+6. Tool frame, then user frames.
+7. Cartesian speed limit, then the mode interlock.
+8. `move_linear` / `move_arc` and the queue.
+9. Studio: Cartesian pendant, then the gizmo.
