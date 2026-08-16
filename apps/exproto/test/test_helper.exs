@@ -7,11 +7,11 @@
 # Bandit-owned processes that are not descendants of the test process, and
 # shared mode is refused while this app's async tests are running — which most
 # of them are, and should stay.
-Ecto.Adapters.SQL.Sandbox.mode(ExAuth.Repo, :auto)
+Ecto.Adapters.SQL.Sandbox.mode(ExStore.Repo, :auto)
 
 Ecto.Migrator.run(
-  ExAuth.Repo,
-  Application.app_dir(:exauth, "priv/repo/migrations"),
+  ExStore.Repo,
+  ExStore.Migrator.migrations_path(),
   :up,
   all: true,
   log: false

@@ -6,7 +6,7 @@ defmodule ExAuth.Accounts do
   import Ecto.Query
 
   alias ExAuth.Accounts.Account
-  alias ExAuth.Repo
+  alias ExStore.Repo
 
   @doc "Creates an account. `attrs` needs `:username`, `:password` and `:role`."
   @spec create(map()) :: {:ok, Account.t()} | {:error, Ecto.Changeset.t()}

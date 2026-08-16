@@ -3,8 +3,8 @@ import Config
 # /data is the writable partition on a Nerves image; the root filesystem is a
 # read-only squashfs and does not survive a firmware update. Credentials must,
 # so they live here beside the TLS key they are protecting.
-config :exauth, ExAuth.Repo,
-  database: "/data/emotion/exauth.db",
+config :exstore, ExStore.Repo,
+  database: "/data/emotion/emotion.db",
   pool_size: 5,
   journal_mode: :wal,
   busy_timeout: 5_000,

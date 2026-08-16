@@ -29,11 +29,14 @@ defmodule ExAuth.MixProject do
 
   defp deps do
     [
-      # SQLite rather than a file: the credential store is small, but the audit
-      # log this will grow next is append-heavy and time-range queried, and one
-      # database beats a file store plus a hand-rolled log rotator.
+      # The controller's database. exauth defines schemas and changesets; the
+      # Repo, the adapter and the migrations belong to whoever owns the file,
+      # and that stopped being this app when frames and tools arrived.
+      {:exstore, in_umbrella: true},
+
+      # Ecto itself, for schemas, changesets and queries. The adapter is
+      # exstore's business.
       {:ecto_sql, "~> 3.11"},
-      {:ecto_sqlite3, "~> 0.17"},
 
       # Argon2id for passwords. A NIF, but a well-trodden one that cross-compiles
       # under the Nerves toolchain, and the thing it protects can move an arm.
@@ -41,10 +44,6 @@ defmodule ExAuth.MixProject do
     ]
   end
 
-  # No ecto.drop alias. `mix test` at the umbrella root runs every app in a
-  # single BEAM against a single Repo process, so dropping the database here
-  # destroys it underneath whichever sibling app is also using it. Isolation
-  # comes from the sandbox and schema from the migrator; neither needs the file
-  # to be new.
+  # No ecto.drop alias; see exstore, which owns the database this would drop.
   defp aliases, do: []
 end

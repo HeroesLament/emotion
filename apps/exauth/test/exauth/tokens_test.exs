@@ -115,6 +115,6 @@ defmodule ExAuth.TokensTest do
   defp expire!(token) do
     token
     |> Ecto.Changeset.change(%{expires_at: DateTime.add(DateTime.utc_now(), -1, :second)})
-    |> ExAuth.Repo.update!()
+    |> ExStore.Repo.update!()
   end
 end

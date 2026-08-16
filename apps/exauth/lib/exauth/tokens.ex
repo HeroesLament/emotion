@@ -18,7 +18,7 @@ defmodule ExAuth.Tokens do
   import Ecto.Query
 
   alias ExAuth.Accounts.Account
-  alias ExAuth.Repo
+  alias ExStore.Repo
   alias ExAuth.Tokens.Token
 
   @prefix "emo_"

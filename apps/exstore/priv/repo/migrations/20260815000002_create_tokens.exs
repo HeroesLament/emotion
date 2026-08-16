@@ -1,4 +1,4 @@
-defmodule ExAuth.Repo.Migrations.CreateTokens do
+defmodule ExStore.Repo.Migrations.CreateTokens do
   use Ecto.Migration
 
   def change do

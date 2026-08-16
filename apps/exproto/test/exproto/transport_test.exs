@@ -32,9 +32,9 @@ defmodule ExProto.TransportTest do
     # commit for real: usernames are random so they survive a database that
     # outlives the run, and the table is emptied here so rows cannot accumulate
     # or leak into a sibling suite's expectations.
-    Ecto.Adapters.SQL.Sandbox.mode(ExAuth.Repo, :auto)
-    ExAuth.Repo.delete_all(ExAuth.Accounts.Account)
-    on_exit(fn -> ExAuth.Repo.delete_all(ExAuth.Accounts.Account) end)
+    Ecto.Adapters.SQL.Sandbox.mode(ExStore.Repo, :auto)
+    ExStore.Repo.delete_all(ExAuth.Accounts.Account)
+    on_exit(fn -> ExStore.Repo.delete_all(ExAuth.Accounts.Account) end)
 
     {:ok, model} = InformationModel.compiled_model()
     {:ok, table} = JSONRPC.project(model)

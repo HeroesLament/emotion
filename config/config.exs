@@ -26,7 +26,7 @@ config :exmove, :joint_limits, %{
 
 # ── Credentials ─────────────────────────────────────────────────────────────
 
-config :exauth, ecto_repos: [ExAuth.Repo]
+config :exstore, ecto_repos: [ExStore.Repo]
 
 # Argon2id parameters are pinned rather than left to the library default, so a
 # dependency bump cannot silently change how long a login takes on a Pi or how

@@ -24,12 +24,12 @@ defmodule ExAuth.DataCase do
       import Ecto.Query
       import ExAuth.DataCase
 
-      alias ExAuth.Repo
+      alias ExStore.Repo
     end
   end
 
   setup _tags do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(ExAuth.Repo, shared: true)
+    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(ExStore.Repo, shared: true)
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
     ExAuth.Throttle.reset_all()
     :ok
