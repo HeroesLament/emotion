@@ -8,7 +8,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       mix exmo.rpc read <nodeId> [nodeId...]
       mix exmo.rpc write <nodeId> <value>
       mix exmo.rpc call <nodeId>
-      mix exmo.rpc jog <nodeId> <velocity> [--for 3] [--axis z]
+      mix exmo.rpc jog <nodeId> <velocity> [--for 3] [--axis z] [--frame tool]
       mix exmo.rpc watch <nodeId> [nodeId...] [--rate 5] [--for 10]
 
   Options: `--host` (localhost), `--port` (4001), `--user`, `--insecure`.
@@ -46,10 +46,30 @@ defmodule Mix.Tasks.Exmo.Rpc do
     {:ok, _} = Application.ensure_all_started(:ssl)
     {:ok, _} = Application.ensure_all_started(:mint_web_socket)
 
-    {opts, args, _} =
+    {opts, args, invalid} =
       OptionParser.parse(argv,
-        strict: [host: :string, port: :integer, user: :string, rate: :float, for: :integer, axis: :string, insecure: :boolean]
+        strict: [
+          host: :string,
+          port: :integer,
+          user: :string,
+          rate: :float,
+          for: :integer,
+          axis: :string,
+          frame: :string,
+          insecure: :boolean
+        ]
       )
+
+    # Strict parsing collects unknown switches rather than failing, and ignoring
+    # that collection is how `--frame tool` spent an afternoon being silently
+    # dropped while the arm jogged in base and looked entirely correct doing it.
+    # An option the tool does not understand is a question it cannot answer.
+    unless invalid == [] do
+      Mix.raise(
+        "unknown option#{if length(invalid) > 1, do: "s"}: " <>
+          Enum.map_join(invalid, ", ", fn {switch, _value} -> switch end)
+      )
+    end
 
     host = Keyword.get(opts, :host, "localhost")
     port = Keyword.get(opts, :port, 4001)
@@ -270,19 +290,26 @@ defmodule Mix.Tasks.Exmo.Rpc do
     end
   end
 
-  defp hold(session, node_id, velocity, until, granted, opts \\ []) do
+  defp put_if(arguments, key, name, opts) do
+    case Keyword.get(opts, key) do
+      nil -> arguments
+      value -> Map.put(arguments, name, value)
+    end
+  end
+
+  defp hold(session, node_id, velocity, until, granted, opts) do
     if System.monotonic_time(:millisecond) >= until do
       {:ok, session, granted}
     else
-      # `--axis` is what a Cartesian jog needs and a joint jog has no use for:
-      # `axes.j1.jog` is already the axis, `axes.jog_cartesian` has six to
-      # choose between. Omitted rather than defaulted, so a joint jog does not
-      # start carrying an argument that means nothing to it.
+      # `--axis` and `--frame` are what a Cartesian jog needs and a joint jog has
+      # no use for: `axes.j1.jog` is already the axis and has only one frame,
+      # while `axes.jog_cartesian` has six directions and a choice of frame.
+      # Omitted rather than defaulted, so a joint jog does not start carrying
+      # arguments that mean nothing to it.
       arguments =
-        case Keyword.get(opts, :axis) do
-          nil -> %{"velocity" => velocity}
-          axis -> %{"velocity" => velocity, "axis" => axis}
-        end
+        %{"velocity" => velocity}
+        |> put_if(:axis, "axis", opts)
+        |> put_if(:frame, "frame", opts)
 
       params = %{"nodeId" => node_id, "arguments" => arguments}
 
