@@ -140,14 +140,22 @@ outliving its argument.
 
   * `base` — the arm's origin. Done.
   * `tool` — the current TCP orientation, re-resolved per tick. Done.
-  * `user` — named, stored, re-teachable. **Not built. This is the next thing.**
+  * `user` — named, stored, re-teachable. Done: rows in the controller's
+    database, resolved through `ExMo.Cell`, and refused rather than silently
+    treated as base when the name is not there.
 
-Model nodes under `frames.<name>`, readable by anyone and writable behind
-`write_configuration`. A frame is six numbers and a name, which makes this the
-smallest piece of work in this document and the one the rest of it needs.
+A frame is six numbers and a name, which made this the smallest piece of work in
+this document and the one the rest of it needs. What is built is the table, the
+resolver and the `frame` argument on every Cartesian motion. What is **not**
+built is the projection: there are no model nodes under `frames.<name>` and no
+method that teaches one over the protocol, so today a frame is written by a
+process with the database open. That is the next piece, and it is where
+`write_configuration` starts guarding something.
 
 Re-teaching a frame must move every point that references it and nothing else.
-That single property is what makes frames worth having, and it is the first test.
+That single property is what makes frames worth having, and it is the first
+test — asserted against poses expressed in the frame, since points do not exist
+yet, which is the same claim one layer down.
 
 Not in scope here, and named so they are not accidentally designed out:
 
@@ -155,9 +163,10 @@ Not in scope here, and named so they are not accidentally designed out:
     by a conveyor encoder. Same storage, different lifecycle, and the grant is
     different too: teaching a frame is configuration, updating one at line rate
     is not.
-  * **Frame hierarchy** — a frame defined relative to another, which is how a
-    fixture on a positioner is described. Every vendor has it. Adding a parent
-    reference later is cheap; assuming there is never one is not.
+  * ~~**Frame hierarchy**~~ — built after all, because it was cheaper now than
+    the migration would have been later: `parent_id` is resolved, cycles are
+    refused at write, and there is a depth cap for rows this suite did not
+    write.
 
 ## 2. Tools, and swappable EOATs
 
@@ -167,10 +176,12 @@ with a different meaning, and the temptation to unify them should be resisted:
 they are looked up by different questions, they are re-taught by different
 procedures, and a point references one of each.
 
-Today the tool is a **field on `ExMove.Chain`**, plumbed through to the NIF
-earlier as `tool: (f64,f64,f64,f64,f64,f64)`. That is compile-time geometry. It
-has to become a row, and the moment it does, the concept the arm has been missing
-falls out: **the fitted tool is machine state, not a constant.**
+The tool *was* a **field on `ExMove.Chain`**, plumbed through to the NIF as
+`tool: (f64,f64,f64,f64,f64,f64)`. That was compile-time geometry. It is a row
+now, and the moment it became one the concept the arm had been missing fell out:
+**the fitted tool is machine state, not a constant.** Fitting one on a running
+controller moves the reported tool centre point without the arm moving, which is
+the whole claim in one observation.
 
 That is what makes an end-of-arm tool swappable, and the general programming
 consequences are worth naming now even though nothing at the effector is being
@@ -545,10 +556,12 @@ worth having:
 
 ## Order
 
-1. **User frames.** Smallest, and everything else references them. Vision is the
-   reason to do them first rather than last.
-2. **Tools**, in the same stroke: the same six numbers, and the move of the
-   chain's compile-time `tool` field into a row that the stream reads.
+1. ~~**User frames.**~~ Done, with parents. Smallest, and everything else
+   references them; vision is the reason they came first rather than last.
+2. ~~**Tools**~~, in the same stroke: the same six numbers, and the chain's
+   compile-time `tool` field moved into a row the stream reads. Both landed in
+   the controller's database, which is `exstore` now rather than `exauth`.
+   Neither is on the protocol yet — see §1.
 3. **Points**, with the frame reference, the tool reference and the taught joint
    solution.
 4. **The statement-kind registry**, with the built-in kinds registered through

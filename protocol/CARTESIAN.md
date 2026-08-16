@@ -556,9 +556,10 @@ caught what we shipped:
 5. ~~Joint-limit stop~~ — done. The first thing to use the `dt` the tick has
    been carrying since the stream landed.
 6. ~~Tool frame~~ — done, along with the tool offset finally reaching the
-   solver, which it never had. User frames still to do: they need somewhere on
-   the controller to store a frame, which is configuration and does not exist
-   yet.
+   solver, which it never had. ~~User frames~~ — done too: they are rows in
+   the controller's database now, resolved with their parents composed in, and
+   the tool is a row as well rather than a field compiled into the chain. See
+   `PROGRAMS.md` §1 and §2.
 7. ~~Cartesian speed limit, then the mode interlock~~ — both done. Keying the
    speed limit to the mode rather than leaving it always-on is the one piece
    left, and it is small.
