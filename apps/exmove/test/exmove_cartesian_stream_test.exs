@@ -355,6 +355,52 @@ defmodule ExMove.CartesianStreamTest do
       assert_in_delta base_distance, tool_distance, base_distance * 0.05
     end
 
+    test "a user frame rotates the twist by the frame and nothing else", ctx do
+      # 90 degrees about base Z. Commanding +X in this frame has to come out as
+      # +Y in the base — the one assertion that distinguishes a frame that is
+      # applied from a frame that is accepted and ignored.
+      frame = %ExMove.Frame{x: 0.1, y: -0.2, z: 0.05, rz: :math.pi() / 2}
+
+      extend(ctx, @across)
+      start = tcp(ctx.chain)
+      finish = travel(ctx, {:user, frame}, [0.05, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+      dx = finish.x - start.x
+      dy = finish.y - start.y
+
+      assert dy > 0.02, "expected motion along base +Y, got dy=#{Float.round(dy * 1000, 1)}mm"
+      assert abs(dx) < abs(dy) / 4, "expected little motion along base X, got dx=#{Float.round(dx * 1000, 1)}mm"
+    end
+
+    test "a user frame's translation does not move the arm", ctx do
+      # A frame is a rotation and an offset, and only the rotation can affect a
+      # velocity. Two frames differing by 300mm of translation must produce the
+      # same jog — if the offset leaked into the twist the arm would set off
+      # toward the frame's origin.
+      near = %ExMove.Frame{x: 0.0, y: 0.0, z: 0.0, rz: 0.3}
+      far = %ExMove.Frame{x: 0.3, y: -0.3, z: 0.3, rz: 0.3}
+
+      extend(ctx, @across)
+      a = travel(ctx, {:user, near}, [0.05, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+      extend(ctx, @across)
+      b = travel(ctx, {:user, far}, [0.05, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+      assert distance(a, b) < 1.0e-3
+    end
+
+    test "a user frame with no rotation is the base frame", ctx do
+      identity = %ExMove.Frame{x: 0.4, y: 0.4, z: 0.4}
+
+      extend(ctx, @across)
+      in_base = travel(ctx, :base, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0])
+
+      extend(ctx, @across)
+      in_user = travel(ctx, {:user, identity}, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0])
+
+      assert distance(in_base, in_user) < 1.0e-3
+    end
+
     test "an unknown frame is refused rather than treated as base", ctx do
       %{chain: chain, axis_ids: axis_ids} = ctx
 

@@ -30,6 +30,12 @@ defmodule Exhmi.MixProject do
     [
       {:ex_opcua, in_umbrella: true},
 
+      # Stored geometry: frames and the fitted tool. This app is where a row
+      # and a matrix are allowed to meet — exstore holds rows and knows nothing
+      # about kinematics, exmove composes transforms and knows nothing about a
+      # database, and ExMo.Cell is the seam.
+      {:exstore, in_umbrella: true},
+
       # For the grant vocabulary. The model declares which grant guards each
       # property, so the names have to come from somewhere both projections
       # agree on. exauth has no dependency back on exhmi, so this stays acyclic.

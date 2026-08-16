@@ -36,6 +36,7 @@ defmodule ExProto.Source.Exdrive do
 
   require Logger
 
+  alias ExMo.Cell
   alias ExMo.Schema.Registry
   alias ExMove.{CartesianStream, FK, Frame, IK, JointState}
   alias ExProto.Mode
@@ -107,6 +108,10 @@ defmodule ExProto.Source.Exdrive do
   defp state_value(_unknown, _faulted?, _server), do: {:error, :unknown_node}
 
   defp any_faulted? do
+    # Registry rather than Cell: this needs the list of axes, which is a fact
+    # about the arm and not about what is bolted to it. Fitting a tool does not
+    # change which drives can fault, and asking the database on every read of
+    # a fault flag would be a query in service of nothing.
     Registry.arm_chain().axis_ids
     |> Enum.any?(fn axis_id ->
       case status(Atom.to_string(axis_id)) do
@@ -149,7 +154,10 @@ defmodule ExProto.Source.Exdrive do
   defp read_tcp([]), do: []
 
   defp read_tcp(node_ids) do
-    chain = Registry.arm_chain()
+    # Cell rather than Registry: where the tool centre point is depends on what
+    # is fitted, and this node is the answer to "where is the tool". Reading it
+    # from the Registry would report the flange and call it the TCP.
+    chain = Cell.chain()
 
     case joint_positions(chain) do
       {:ok, positions} ->
@@ -201,6 +209,9 @@ defmodule ExProto.Source.Exdrive do
   defp read_cartesian([]), do: []
 
   defp read_cartesian(node_ids) do
+    # Registry again, and again because the tool is irrelevant: this needs the
+    # chain's *name* to find the stream. This node is polled by every connected
+    # pendant; the fitted tool has nothing to say about a status.
     status = CartesianStream.status(Registry.arm_chain().name) || :idle
     Enum.map(node_ids, &{&1, cartesian_value(&1, status)})
   end
@@ -263,7 +274,7 @@ defmodule ExProto.Source.Exdrive do
   end
 
   def cartesian_value("axes.cartesian.manipulability", _status) do
-    chain = Registry.arm_chain()
+    chain = Cell.chain()
 
     case joint_positions(chain) do
       {:ok, positions} ->
@@ -468,7 +479,7 @@ defmodule ExProto.Source.Exdrive do
     with {:ok, frame} <- frame(args),
          {:ok, twist} <- twist(args),
          :ok <- mode_permits(stopped?(twist), arg) do
-      chain = Registry.arm_chain()
+      chain = Cell.chain()
 
       # Zero is a stop, and it is the value the watchdog asserts when the
       # operator lets go or the link drops. Releasing the stream commands zero on
@@ -503,9 +514,10 @@ defmodule ExProto.Source.Exdrive do
   # is no such thing here: a move has no zero, and the way to stop one is `stop`.
   defp move_linear(args, arg) do
     with :ok <- Mode.allows_jog?(mode_server(arg)),
-         {:ok, target} <- target_frame(args),
+         {:ok, in_frame} <- target_in(args),
+         {:ok, target} <- target_frame(args, in_frame),
          {:ok, feedrate} <- feedrate(args) do
-      chain = Registry.arm_chain()
+      chain = Cell.chain()
 
       chain
       |> CartesianStream.move_linear(target, motion_opts(args, feedrate, arg))
@@ -515,10 +527,11 @@ defmodule ExProto.Source.Exdrive do
 
   defp move_arc(args, arg) do
     with :ok <- Mode.allows_jog?(mode_server(arg)),
-         {:ok, target} <- target_frame(args),
-         {:ok, via} <- via_frame(args),
+         {:ok, in_frame} <- target_in(args),
+         {:ok, target} <- target_frame(args, in_frame),
+         {:ok, via} <- via_frame(args, in_frame),
          {:ok, feedrate} <- feedrate(args) do
-      chain = Registry.arm_chain()
+      chain = Cell.chain()
 
       chain
       |> CartesianStream.move_arc(via, target, motion_opts(args, feedrate, arg))
@@ -530,11 +543,16 @@ defmodule ExProto.Source.Exdrive do
   # a promise about the middle of a move that this build does not keep — the
   # tool is driven toward the *end* orientation, paced to arrive with the
   # position, rather than slerped along the path.
-  defp via_frame(args) do
+  defp via_frame(args, in_frame) do
     with {:ok, x} <- as_float(args["via_x"]),
          {:ok, y} <- as_float(args["via_y"]),
-         {:ok, z} <- as_float(args["via_z"]) do
-      {:ok, %Frame{x: x, y: y, z: z}}
+         {:ok, z} <- as_float(args["via_z"]),
+         {:ok, %Frame{} = placed} <- into_base(in_frame, %Frame{x: x, y: y, z: z}) do
+      # Position only, deliberately. Composing a frame in gives the via point
+      # the frame's orientation as a side effect, and carrying that forward
+      # would look like a promise about the tool's attitude at the middle of an
+      # arc — which this build does not keep.
+      {:ok, %Frame{x: placed.x, y: placed.y, z: placed.z}}
     end
   end
 
@@ -560,30 +578,68 @@ defmodule ExProto.Source.Exdrive do
   # rather than "go to zero". A client asking to move somewhere without saying
   # anything about the wrist has not asked for the wrist to be levelled, and
   # reading silence as a command is how a tool ends up somewhere surprising.
-  defp target_frame(args) do
+  defp target_frame(args, in_frame) do
     with {:ok, x} <- as_float(args["x"]),
          {:ok, y} <- as_float(args["y"]),
          {:ok, z} <- as_float(args["z"]) do
-      chain = Registry.arm_chain()
-
       case {args["rx"], args["ry"], args["rz"]} do
         {nil, nil, nil} ->
-          case joint_positions(chain) do
-            {:ok, positions} ->
-              here = FK.solve(chain, %JointState{positions: positions})
-              {:ok, %Frame{here | x: x, y: y, z: z}}
-
-            {:error, reason} ->
-              {:error, reason}
-          end
+          keep_orientation(in_frame, x, y, z)
 
         {rx, ry, rz} ->
           with {:ok, rx} <- as_float(rx),
                {:ok, ry} <- as_float(ry),
                {:ok, rz} <- as_float(rz) do
-            {:ok, %Frame{x: x, y: y, z: z, rx: rx, ry: ry, rz: rz}}
+            into_base(in_frame, %Frame{x: x, y: y, z: z, rx: rx, ry: ry, rz: rz})
           end
       end
+    end
+  end
+
+  # "Keep the orientation you have" has to be answered in the frame the target
+  # was given in, not in the base. Where the arm is now is a fact about the
+  # base, so it is expressed in the frame, the position is replaced there, and
+  # the whole thing goes back — which leaves the wrist exactly where it was and
+  # is the only route that does when the frame is rotated.
+  defp keep_orientation(in_frame, x, y, z) do
+    chain = Cell.chain()
+
+    with {:ok, positions} <- joint_positions(chain) do
+      here = FK.solve(chain, %JointState{positions: positions})
+
+      case Cell.pose_in_frame(in_frame, here) do
+        {:ok, %Frame{} = in_frame_pose} ->
+          into_base(in_frame, %{in_frame_pose | x: x, y: y, z: z})
+
+        {:error, _reason} ->
+          {:error, :rejected}
+      end
+    end
+  end
+
+  defp into_base(in_frame, %Frame{} = pose) do
+    case Cell.pose_in_base(in_frame, pose) do
+      {:ok, placed} -> {:ok, placed}
+      {:error, _reason} -> {:error, :rejected}
+    end
+  end
+
+  # Which frame a *target* is given in. Narrower than the jog's, on purpose:
+  # `tool` is a legitimate frame to push a velocity along and a meaningless one
+  # to name a destination in, because the tool is where the arm already is —
+  # "go to the tool" is either a no-op or a request for relative motion, and
+  # relative motion is a different method than the one that takes a pose.
+  defp target_in(args) do
+    case Map.get(args, "frame") || "base" do
+      "tool" ->
+        {:error, :rejected}
+
+      name ->
+        case Cell.frame(name) do
+          {:ok, :base} -> {:ok, "base"}
+          {:ok, {:user, _resolved}} -> {:ok, name}
+          {:error, _reason} -> {:error, :rejected}
+        end
     end
   end
 
@@ -598,14 +654,16 @@ defmodule ExProto.Source.Exdrive do
   # argument is worth having. An operator who selects USER on a pendant and gets
   # WORLD motion learns about it from the fixture.
   #
-  # `user` is not here yet: user frames are stored on the controller as
-  # configuration, and there is nowhere to store them. It is refused by the same
-  # clause that refuses a typo, which is honest — this build does not have it.
+  # A stored frame is resolved here, with its parents composed in, and handed to
+  # the stream as six numbers. The stream is given a transform rather than a
+  # name because it runs at 200 Hz and must not be holding a database handle.
   defp frame(args) do
-    case Map.get(args, "frame") || "base" do
-      "base" -> {:ok, :base}
-      "tool" -> {:ok, :tool}
-      _unknown -> {:error, :rejected}
+    case Cell.frame(Map.get(args, "frame") || "base") do
+      {:ok, resolved} -> {:ok, resolved}
+      # Refused by the same clause that refuses a typo, which is the honest
+      # answer: an operator who selects a frame that is not there and gets WORLD
+      # motion learns about it from the fixture.
+      {:error, _reason} -> {:error, :rejected}
     end
   end
 

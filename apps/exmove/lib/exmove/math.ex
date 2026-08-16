@@ -95,6 +95,23 @@ defmodule ExMove.Math do
     {roll, pitch, yaw}
   end
 
+  @doc """
+  The inverse of a rigid transform: transpose the rotation, negate the
+  rotated translation.
+
+  Not a general 4x4 inverse, and deliberately not. Every transform in this
+  suite is a rotation and a translation, for which this is exact and costs a
+  handful of multiplies; a general inverse would be slower, would introduce
+  a determinant that can be near zero, and would quietly accept a matrix that
+  is not a pose at all.
+  """
+  def invert_rigid({r00, r01, r02, x, r10, r11, r12, y, r20, r21, r22, z, _, _, _, _}) do
+    {r00, r10, r20, -(r00 * x + r10 * y + r20 * z),
+     r01, r11, r21, -(r01 * x + r11 * y + r21 * z),
+     r02, r12, r22, -(r02 * x + r12 * y + r22 * z),
+     0.0, 0.0, 0.0, 1.0}
+  end
+
   @doc "Compose a list of transforms left to right"
   def compose(transforms) do
     Enum.reduce(transforms, identity(), &mul(&2, &1))

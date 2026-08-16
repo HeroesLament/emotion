@@ -973,6 +973,24 @@ defmodule ExMove.CartesianStream do
     {:ok, [lx, ly, lz, ax, ay, az]}
   end
 
+  # A user frame is fixed in the base, so unlike the tool frame its rotation
+  # does not change as the arm moves — but it is still resolved here rather
+  # than at the press, because that keeps one code path for all three and the
+  # cost is a matrix multiply against a 5 ms tick.
+  #
+  # The frame arrives already resolved, as six numbers relative to the base.
+  # Composing it with its parents is storage's problem and is done by whoever
+  # read the row; this module knows kinematics and nothing about a database.
+  defp in_base({:user, %Frame{} = frame}, _chain, _js, twist) do
+    r = FK.frame_transform(frame)
+    [vx, vy, vz, wx, wy, wz] = twist
+
+    {lx, ly, lz} = rotate(r, {vx, vy, vz})
+    {ax, ay, az} = rotate(r, {wx, wy, wz})
+
+    {:ok, [lx, ly, lz, ax, ay, az]}
+  end
+
   # An unknown frame is refused rather than quietly treated as base. A pendant
   # showing USER and moving the arm in WORLD is the kind of wrong that gets
   # noticed by a fixture.

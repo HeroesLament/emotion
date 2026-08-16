@@ -74,6 +74,40 @@ defmodule ExMove.FK do
   """
   def frame_transform(frame), do: frame_to_transform(frame)
 
+  @doc """
+  A pose expressed in `outer`, expressed in whatever `outer` is expressed in.
+
+  The whole of what a user frame does. A point taught at `inner` inside a
+  fixture frame is at `compose(fixture, inner)` in the base, and re-teaching
+  the fixture moves it — which is the single property frames exist for.
+
+  Composition is not commutative and the argument order is the one that reads
+  left to right from the base outwards: `compose(table, jig)` is the jig on the
+  table. Getting it backwards produces a pose that is wrong and plausible,
+  which is the worst kind, so there is exactly one of these in the suite.
+  """
+  def compose(outer, inner) do
+    outer
+    |> frame_to_transform()
+    |> Math.mul(frame_to_transform(inner))
+    |> transform_to_frame()
+  end
+
+  @doc """
+  The inverse of `compose/2`: a pose in the base, expressed in `outer`.
+
+  Teaching runs this way round. The arm reports where it is in the base, the
+  pendant says USER, and what gets stored is the pose in the frame — so that
+  moving the frame later moves the point.
+  """
+  def express_in(outer, pose) do
+    outer
+    |> frame_to_transform()
+    |> Math.invert_rigid()
+    |> Math.mul(frame_to_transform(pose))
+    |> transform_to_frame()
+  end
+
   # --- Private --------------------------------------------------------------
 
   defp joint_transform(joint, theta) do

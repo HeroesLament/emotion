@@ -290,9 +290,12 @@ defmodule ExMo.Schema.Registry do
             "`base` — the arm's origin, fixed in the cell. `tool` — the current " <>
               "tool centre point orientation, re-resolved every controller " <>
               "tick, so a rotation about a tool axis follows the tool rather " <>
-              "than tracing a cone. `user` frames are not implemented and are " <>
-              "refused, as is anything unrecognised: a pendant showing one " <>
-              "frame while the arm moves in another is a bug found by a fixture."
+              "than tracing a cone. Any other name is a user frame stored on " <>
+              "the controller, resolved with its parents composed in, so a " <>
+              "re-taught fixture moves everything taught in it. An " <>
+              "unrecognised name is refused rather than treated as base: a " <>
+              "pendant showing one frame while the arm moves in another is a " <>
+              "bug found by a fixture."
         },
         %Argument{
           name: "deadlineMs",
@@ -400,39 +403,41 @@ defmodule ExMo.Schema.Registry do
           name: "x",
           type: :double,
           required: true,
-          description: "Target tool position along base X, metres"
+          description: "Target tool position along X of `frame`, metres"
         },
         %Argument{
           name: "y",
           type: :double,
           required: true,
-          description: "Target tool position along base Y, metres"
+          description: "Target tool position along Y of `frame`, metres"
         },
         %Argument{
           name: "z",
           type: :double,
           required: true,
-          description: "Target tool position along base Z, metres"
+          description: "Target tool position along Z of `frame`, metres"
         },
         %Argument{
           name: "rx",
           type: :double,
           required: false,
           description:
-            "Target tool roll about base X, radians. Omit all three rotations " <>
-              "to keep the orientation the arm already has."
+            "Target tool roll about X of `frame`, radians. Omit all three " <>
+              "rotations to keep the orientation the arm already has — which " <>
+              "is answered in `frame`, so a rotated frame does not turn the " <>
+              "wrist by saying nothing about it."
         },
         %Argument{
           name: "ry",
           type: :double,
           required: false,
-          description: "Target tool pitch about base Y, radians"
+          description: "Target tool pitch about Y of `frame`, radians"
         },
         %Argument{
           name: "rz",
           type: :double,
           required: false,
-          description: "Target tool yaw about base Z, radians"
+          description: "Target tool yaw about Z of `frame`, radians"
         },
         %Argument{
           name: "feedrate",
@@ -454,7 +459,8 @@ defmodule ExMo.Schema.Registry do
               "terminations every teach pendant shows per line. Ignored when " <>
               "nothing is queued behind: rounding a corner into nothing is " <>
               "just stopping short."
-        }
+        },
+        target_frame_argument()
       ]
     }
   end
@@ -501,17 +507,39 @@ defmodule ExMo.Schema.Registry do
                   "FINE and CNT terminations every teach pendant shows per " <>
                   "line. Ignored when nothing is queued behind: rounding a " <>
                   "corner into nothing is just stopping short."
-            }
+            },
+            target_frame_argument()
           ]
+    }
+  end
+
+  # The frame a *destination* is named in, which is narrower than the frame a
+  # velocity is pushed along. `tool` is refused here: the tool is where the arm
+  # already is, so a destination named in it is either a no-op or a request for
+  # relative motion — and relative motion should be its own method rather than
+  # a surprising reading of this one.
+  defp target_frame_argument do
+    %Argument{
+      name: "frame",
+      type: :string,
+      required: false,
+      default: "base",
+      description:
+        "The frame the target is given in. `base` — the arm's origin. Any " <>
+          "other name is a user frame stored on the controller, with its " <>
+          "parents composed in, so re-teaching a fixture moves every target " <>
+          "given in it. `tool` is refused, as is any name that is not stored: " <>
+          "a destination that quietly means somewhere else is the failure this " <>
+          "argument exists to prevent."
     }
   end
 
   defp arc_point_args do
     for {prefix, what} <- [{"via", "the point the arc passes through"}, {"", "the end pose"}],
         {axis, label} <- [
-          {"x", "position along base X, metres"},
-          {"y", "position along base Y, metres"},
-          {"z", "position along base Z, metres"}
+          {"x", "position along X of `frame`, metres"},
+          {"y", "position along Y of `frame`, metres"},
+          {"z", "position along Z of `frame`, metres"}
         ] do
       %Argument{
         name: if(prefix == "", do: axis, else: prefix <> "_" <> axis),
