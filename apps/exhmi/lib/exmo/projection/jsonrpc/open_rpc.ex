@@ -304,6 +304,7 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
         error_ref("NotCallable"),
         error_ref("Forbidden"),
         error_ref("NodeHeld"),
+        error_ref("WrongMode"),
         error_ref("WriteRejected")
       ]
     }
@@ -589,6 +590,15 @@ defmodule ExMo.Projection.JSONRPC.OpenRPC do
       "NotCallable" => %{
         "code" => -32012,
         "message" => "Node is not a method, or this controller has no command bound to it."
+      },
+      "WrongMode" => %{
+        "code" => -32014,
+        "data" => %{"mode" => "the mode the controller is actually in"},
+        "message" =>
+          "The controller is not in a mode that permits this command. Jogging is " <>
+            "manual-mode only. The mode is not writable over this protocol — on a " <>
+            "machine it is a keyswitch, and a client that could turn it would not " <>
+            "have been interlocked so much as asked politely."
       },
       "NodeHeld" => %{
         "code" => -32013,

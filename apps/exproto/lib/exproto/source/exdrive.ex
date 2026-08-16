@@ -38,6 +38,7 @@ defmodule ExProto.Source.Exdrive do
 
   alias ExMo.Schema.Registry
   alias ExMove.{CartesianStream, FK, IK, JointState}
+  alias ExProto.Mode
 
   # CiA 402 states in which the drive accepts a setpoint. Everything else
   # discards it; see Exdrive.Drive.
@@ -57,12 +58,66 @@ defmodule ExProto.Source.Exdrive do
   end
 
   @impl ExProto.Source
-  def read_many(node_ids, _arg) do
-    {cartesian_ids, rest} = Enum.split_with(node_ids, &cartesian?/1)
+  def read_many(node_ids, arg) do
+    {state_ids, rest} = Enum.split_with(node_ids, &controller_state?/1)
+    {cartesian_ids, rest} = Enum.split_with(rest, &cartesian?/1)
     {tcp_ids, axis_ids} = Enum.split_with(rest, &tcp?/1)
 
-    read_axes(axis_ids) ++ read_tcp(tcp_ids) ++ read_cartesian(cartesian_ids)
+    read_axes(axis_ids) ++ read_tcp(tcp_ids) ++ read_cartesian(cartesian_ids) ++
+      read_state(state_ids, arg)
   end
+
+  # ── The controller's own state ────────────────────────────────────────────
+
+  # `state.controller_mode` and `state.fault_present` have been in the model
+  # since it was written and no source has ever answered them, so browsing found
+  # them readable and reading them returned UnknownNode. A model that advertises
+  # a node nothing serves is worse than one that omits it: a client cannot tell
+  # "this controller does not have that" from "this controller is broken", and
+  # the browse says the opposite of the read in the same session.
+  defp read_state([], _arg), do: []
+
+  defp read_state(node_ids, arg) do
+    faulted? = any_faulted?()
+    Enum.map(node_ids, &{&1, state_value(&1, faulted?, mode_server(arg))})
+  end
+
+  # Which mode process this controller's. Named per endpoint like the watchdog,
+  # because the test suite runs several controllers in one VM and a mode shared
+  # between them would let one test's keyswitch refuse another test's jog.
+  defp mode_server(arg) when is_list(arg), do: Keyword.get(arg, :mode, Mode)
+  defp mode_server(_arg), do: Mode
+
+  # The selector position and the fault condition, combined into the one
+  # vocabulary the model publishes.
+  #
+  # They are kept apart underneath — a fault is something the machine is in, not
+  # somewhere an operator turned a key to, and letting a fault move the selector
+  # would mean clearing the fault left the machine wherever the fault had put it.
+  # Fault wins on the way out, because an operator looking at a faulted machine
+  # is not helped by being told it is in manual.
+  defp state_value("state.controller_mode", true, _server), do: {:ok, "fault"}
+
+  defp state_value("state.controller_mode", false, server),
+    do: {:ok, Atom.to_string(Mode.selected(server))}
+
+  defp state_value("state.fault_present", faulted?, _server), do: {:ok, faulted?}
+  defp state_value(_unknown, _faulted?, _server), do: {:error, :unknown_node}
+
+  defp any_faulted? do
+    Registry.arm_chain().axis_ids
+    |> Enum.any?(fn axis_id ->
+      case status(Atom.to_string(axis_id)) do
+        {:ok, %{state: state}} -> state in [:fault, :fault_reaction_active]
+        # A drive that cannot be read is not evidence of a fault, and reporting
+        # one would send an operator looking for something that is not there.
+        # It is a wiring problem, and `axes.jN.state` is where it shows.
+        {:error, _reason} -> false
+      end
+    end)
+  end
+
+  defp controller_state?(node_id), do: String.starts_with?(node_id, "state.")
 
   defp read_axes(node_ids) do
     node_ids
@@ -234,11 +289,11 @@ defmodule ExProto.Source.Exdrive do
   # ── Commands ──────────────────────────────────────────────────────────────
 
   @impl ExProto.Source
-  def call("axes.jog_cartesian", args, _arg), do: jog_cartesian(args)
+  def call("axes.jog_cartesian", args, arg), do: jog_cartesian(args, arg)
 
-  def call(node_id, args, _arg) do
+  def call(node_id, args, arg) do
     case parse(node_id) do
-      {:ok, axis, command} -> command(axis, command, args)
+      {:ok, axis, command} -> command(axis, command, args, arg)
       :error -> {:error, :unknown_node}
     end
   end
@@ -248,7 +303,7 @@ defmodule ExProto.Source.Exdrive do
   # axis's `state`. Checking the drive is reachable first means an axis whose
   # process is gone reports :rejected rather than silently swallowing the
   # command — a cast to a dead name would look like success.
-  defp command(axis, name, args) do
+  defp command(axis, name, args, arg) do
     with {:ok, status} <- status(axis) do
       case name do
         "enable" -> Exdrive.Drive.enable(axis) && :ok
@@ -259,7 +314,7 @@ defmodule ExProto.Source.Exdrive do
         "stop" -> Exdrive.Drive.quick_stop(axis) && :ok
         "reset_fault" -> Exdrive.Drive.fault_reset(axis) && :ok
         "home" -> home(axis)
-        "jog" -> jog(axis, status, args)
+        "jog" -> jog(axis, status, args, arg)
         _ -> {:error, :not_callable}
       end
     end
@@ -275,15 +330,32 @@ defmodule ExProto.Source.Exdrive do
   # before it was enabled would sit on the setpoint and take off the instant
   # somebody energised it — with no assertion outstanding by then, and nothing
   # the watchdog could recognise as a hold to stop.
-  defp jog(axis, %{state: :operation_enabled} = status, args) do
+  defp jog(axis, %{state: :operation_enabled} = status, args, arg) do
     with {:ok, velocity} <- as_float(args["velocity"]),
+         :ok <- mode_permits(velocity == 0.0, arg),
          {:ok, _mode} <- ensure_velocity_mode(axis, status) do
       Exdrive.Drive.set_target_velocity(axis, clamp_jog(velocity))
       :ok
     end
   end
 
-  defp jog(_axis, _status, _args), do: {:error, :rejected}
+  defp jog(_axis, _status, _args, _arg), do: {:error, :rejected}
+
+  # An interlock that can refuse a stop is not an interlock.
+  #
+  # Every assertion that commands zero is permitted in any mode, and it has to
+  # be: turning the selector out of manual releases every hold, releasing a hold
+  # commands zero, and that zero comes back through this same function. A mode
+  # check in front of it would mean the interlock preventing the stop it exists
+  # to cause — and the arm carrying on in AUTO because it was told not to move.
+  #
+  # It also removes a deadlock, which is how this was found. The mode process
+  # calls the watchdog, the watchdog re-enters the source, and the source used to
+  # ask the mode process a question it could not answer while it was mid-change.
+  # Asking whether this is a stop before asking anything of the mode is both the
+  # correct rule and the one that does not re-enter.
+  defp mode_permits(true = _neutral?, _arg), do: :ok
+  defp mode_permits(_not_neutral, arg), do: Mode.allows_jog?(mode_server(arg))
 
   # Only when it has to change. This runs at the client's assertion rate, and
   # set_mode is a call — a synchronous round trip into the drive's state
@@ -346,9 +418,10 @@ defmodule ExProto.Source.Exdrive do
   # Velocity IK stays the method, and for the same reason as before: it is
   # differential, so the arm cannot flip elbow-up to elbow-down partway through
   # because a different solution scored better. That flip is a collision.
-  defp jog_cartesian(args) do
+  defp jog_cartesian(args, arg) do
     with {:ok, frame} <- frame(args),
-         {:ok, twist} <- twist(args) do
+         {:ok, twist} <- twist(args),
+         :ok <- mode_permits(stopped?(twist), arg) do
       chain = Registry.arm_chain()
 
       # Zero is a stop, and it is the value the watchdog asserts when the

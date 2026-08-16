@@ -22,6 +22,12 @@ defmodule ExProto.Source.ExdriveTest do
   @axis_id :src_test_j1
 
   setup do
+    # The source refuses a jog when it cannot find a mode process, which is the
+    # right way round — an absent interlock is not permission — and means a test
+    # that jogs has to supply one.
+    start_supervised!({ExProto.Jog, name: SourceTestJog})
+    start_supervised!({ExProto.Mode, name: SourceTestMode, jog: SourceTestJog})
+
     case Exdrive.start_axis(@axis_id, clock: :external) do
       {:ok, _} -> :ok
       {:error, {:already_started, _}} -> :ok
@@ -34,7 +40,7 @@ defmodule ExProto.Source.ExdriveTest do
     Exdrive.Drive.set_target_position(@axis_id, 0.0)
     settle()
 
-    :ok
+    %{arg: [mode: SourceTestMode]}
   end
 
   describe "writing a position" do
@@ -45,12 +51,12 @@ defmodule ExProto.Source.ExdriveTest do
       assert_in_delta Exdrive.Drive.status(@axis_id).actual_position, 0.5, 1.0e-3
     end
 
-    test "moves the axis after a jog has left it in velocity mode" do
+    test "moves the axis after a jog has left it in velocity mode", %{arg: arg} do
       # What a client does: jog, let go, then type a position in.
-      assert :ok = Source.call("axes.#{@axis}.jog", %{"velocity" => 0.2}, nil)
+      assert :ok = Source.call("axes.#{@axis}.jog", %{"velocity" => 0.2}, arg)
       assert Exdrive.Drive.status(@axis_id).mode == :profile_velocity
 
-      assert :ok = Source.call("axes.#{@axis}.jog", %{"velocity" => 0.0}, nil)
+      assert :ok = Source.call("axes.#{@axis}.jog", %{"velocity" => 0.0}, arg)
       settle()
 
       from = Exdrive.Drive.status(@axis_id).actual_position

@@ -136,6 +136,21 @@ defmodule ExProto.Jog do
     end
   end
 
+  @doc """
+  Zero and drop every hold, whoever owns them.
+
+  For the reasons that are about the machine rather than about one node: the mode
+  selector leaving manual, and anything else that later needs every axis to stop
+  without knowing what is moving. Each hold is neutralised rather than dropped,
+  because dropping alone would leave the axes on their last setpoint.
+  """
+  def release_all(server \\ __MODULE__) do
+    GenServer.call(server, :release_all)
+  catch
+    :exit, {:noproc, _} -> :ok
+    :exit, {:normal, _} -> :ok
+  end
+
   @doc "Who holds `key`, if anyone. For tests and diagnostics."
   @spec holder(key(), term()) :: {:ok, pid()} | :none
   def holder(key, server \\ __MODULE__) do
@@ -210,6 +225,16 @@ defmodule ExProto.Jog do
       |> Enum.reduce(state, fn
         {^key, hold}, state -> drop(state, key, hold)
         {other, hold}, state -> neutralise(state, other, hold)
+      end)
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:release_all, _from, state) do
+    state =
+      Enum.reduce(state.holds, state, fn {key, hold}, state ->
+        Logger.warning("jog watchdog: releasing #{hold.node_id} — commanding zero")
+        neutralise(state, key, hold)
       end)
 
     {:reply, :ok, state}

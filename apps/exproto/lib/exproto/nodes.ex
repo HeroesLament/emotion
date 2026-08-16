@@ -38,6 +38,7 @@ defmodule ExProto.Nodes do
   @forbidden -32_011
   @not_callable -32_012
   @node_held -32_013
+  @wrong_mode -32_014
 
   @invalid_params -32_602
 
@@ -59,7 +60,8 @@ defmodule ExProto.Nodes do
       write_rejected: @write_rejected,
       forbidden: @forbidden,
       not_callable: @not_callable,
-      node_held: @node_held
+      node_held: @node_held,
+      wrong_mode: @wrong_mode
     }
   end
 
@@ -471,6 +473,16 @@ defmodule ExProto.Nodes do
     do:
       {:error, @write_rejected,
        "The jog watchdog is not running; refusing to command motion nothing would stop"}
+
+  # Its own code, carrying the mode. A client refused with a generic "rejected"
+  # can only say the controller said no; one that is told the mode can say what
+  # is actually true — the machine is in AUTO — and an operator can go and turn
+  # the key rather than filing a bug.
+  defp call_error({:wrong_mode, mode}),
+    do:
+      {:error, @wrong_mode,
+       "The controller is in #{mode} mode; jogging is only permitted in manual",
+       %{"mode" => Atom.to_string(mode)}}
 
   # The command could not be started — not that it started and failed. What
   # happened after acceptance is on `state`.

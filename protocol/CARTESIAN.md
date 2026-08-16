@@ -307,11 +307,73 @@ at the manual limit rather than leaving an operator to wonder why 1 m/s produced
 
 ## 7. Mode
 
-Jogging is gated on a grant, which answers "may this person ever jog". It does
-not answer "is this machine in a state where jogging is what should happen".
-Manual mode belongs on the controller as a property, with jog refused outside
-it and the manual speed limit keyed to it. A pendant that greys out its own
-buttons is a suggestion; a controller that refuses is an interlock.
+Done. `ExProto.Mode` holds the selector; `state.controller_mode` publishes it;
+jogging is refused outside manual.
+
+`state.controller_mode` had been declared in the model since it was written and
+no source ever answered it, so a client could browse to a node marked readable
+and then be told it does not exist — the browse contradicting the read inside one
+session. That is worse than omitting the node: a client cannot tell "this
+controller has no such thing" from "this controller is broken".
+
+**Not writable over the protocol**, and that is the whole point. On a machine the
+selector is a keyswitch, and it is a keyswitch precisely so software cannot turn
+it. A client that could put a controller into manual in order to be allowed to
+jog has not been interlocked; it has been asked politely. So the mode is
+published read-only and moved by `select/1` from the console — which on hardware
+becomes a discrete input, and this module becomes the thing that reads it rather
+than the thing that stores it.
+
+**Leaving manual releases every hold**, and releasing a hold commands zero.
+Nothing new stops the arm: the watchdog has known how to do that since it was
+written, and mode is simply another reason for it to fire. One stopping mechanism
+with several triggers beats several mechanisms that all have to be correct.
+
+### An interlock that can refuse a stop is not an interlock
+
+Found by deadlock, which was the polite version of the problem.
+
+The mode process calls the watchdog to release holds; the watchdog re-enters the
+source to command zero; the source asked the mode whether jogging was permitted —
+of a process that was mid-change and could not answer. That is a hang. But undo
+the hang naively, by letting the mode answer, and the answer is *no*: the zero
+that stops the arm is itself a jog assertion, and the interlock refuses it. The
+selector leaves manual, the arm is told to stop, the interlock prevents the stop,
+and the arm carries on moving in AUTO because it was told not to move.
+
+So every assertion whose value is neutral is permitted in every mode, checked
+*before* anything is asked of the mode. That is both the correct rule and the one
+that does not re-enter. It generalises: any future interlock on a held command
+gates the command and never the release.
+
+### Fault
+
+Reported as `fault` whenever any axis is faulted, whatever the selector says —
+an operator looking at a faulted machine is not helped by being told it is in
+manual. Kept separate underneath, because a fault is a condition the machine is
+in and not somewhere an operator turned a key to; conflating them would mean
+clearing a fault left the selector wherever the fault had put it.
+`state.fault_present` is the same question asked directly, and it also never had
+a source.
+
+### Fail closed
+
+A controller with no mode process is not in manual. `selected/1` answers `:idle`
+when it cannot reach one, because the failure that matters is the one where the
+guard is missing and the arm moves anyway.
+
+### Errors
+
+`WrongMode`, -32014, carrying the mode in its data. A client refused with a
+generic rejection can only say the controller said no; one told the mode can say
+what is true — the machine is in AUTO — and an operator can go and turn the key
+rather than filing a bug.
+
+### Still open
+
+The manual speed limit in section 6 is always on rather than keyed to this. It
+should be the manual-mode value, with auto getting its own, and that is a small
+change now that mode is real.
 
 ## 8. Beyond jogging
 
@@ -383,7 +445,8 @@ caught what we shipped:
    solver, which it never had. User frames still to do: they need somewhere on
    the controller to store a frame, which is configuration and does not exist
    yet.
-7. ~~Cartesian speed limit~~ — done. The mode interlock still to do, and it is
-   what turns this limit from always-on into manual-only.
+7. ~~Cartesian speed limit, then the mode interlock~~ — both done. Keying the
+   speed limit to the mode rather than leaving it always-on is the one piece
+   left, and it is small.
 8. `move_linear` / `move_arc` and the queue.
 9. Studio: Cartesian pendant, then the gizmo.

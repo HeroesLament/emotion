@@ -26,7 +26,7 @@ defmodule ExProto.Endpoint do
 
   require Logger
 
-  alias ExProto.{Jog, Router, TLS}
+  alias ExProto.{Jog, Mode, Router, TLS}
 
   @default_port 4001
 
@@ -55,6 +55,7 @@ defmodule ExProto.Endpoint do
     scheme = Keyword.get(opts, :scheme, :https)
     port = Keyword.get(opts, :port, @default_port)
     jog = Keyword.get(opts, :jog, jog_name(port))
+    mode = Keyword.get(opts, :mode, mode_name(port))
 
     with {:ok, built} <- build(Keyword.put(opts, :jog, jog), scheme) do
       children = [
@@ -65,6 +66,11 @@ defmodule ExProto.Endpoint do
         # nothing can be holding an axis by the time it runs terminate/2 and
         # zeroes whatever is left.
         {Jog, name: jog},
+        # After the watchdog and before the listener. Turning the selector
+        # releases every hold, so the thing it releases them through has to
+        # outlive it — and no connection should be able to jog before there is
+        # a mode to check against.
+        {Mode, name: mode, jog: jog},
         {Bandit,
          plug: {Router, built.plug_opts},
          scheme: scheme,
@@ -84,6 +90,7 @@ defmodule ExProto.Endpoint do
   # and they must not share holds; the port is what already distinguishes them.
   # An endpoint on an ephemeral port needs `:jog` passed explicitly.
   defp jog_name(port), do: Module.concat(Jog, "P#{port}")
+  defp mode_name(port), do: Module.concat(Mode, "P#{port}")
 
   defp build(opts, :http) do
     Logger.warning("""

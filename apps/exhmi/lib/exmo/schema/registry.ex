@@ -441,7 +441,23 @@ defmodule ExMo.Schema.Registry do
       name:        "State",
       description: "Top-level controller state",
       children: [
-        %Property{id: "state.controller_mode", name: "ControllerMode", type: :string,  description: "Current controller operating mode: idle | manual | auto | fault"},
+        %Property{
+          id: "state.controller_mode",
+          name: "ControllerMode",
+          type: :string,
+          observable: true,
+          description:
+            "idle | manual | auto | fault. Jogging is permitted in manual and " <>
+              "refused in every other mode — a grant answers whether this " <>
+              "person may ever jog, and this answers whether the machine is in " <>
+              "a state where jogging is what should be happening. Read-only " <>
+              "and deliberately so: on a machine this is a keyswitch, and a " <>
+              "client that could turn it in order to be allowed to move the arm " <>
+              "would not have been interlocked so much as asked politely. " <>
+              "`fault` is reported whenever any axis is faulted, whatever the " <>
+              "selector says, because an operator looking at a faulted machine " <>
+              "is not helped by being told it is in manual."
+        },
         %Property{id: "state.fault_present",   name: "FaultPresent",   type: :boolean, description: "True if any active fault is present on the controller"}
       ]
     }

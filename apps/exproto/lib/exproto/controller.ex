@@ -44,10 +44,13 @@ defmodule ExProto.Controller do
   def start_link(opts \\ []) do
     with {:ok, table} <- node_table(),
          :ok <- start_drives(table, Keyword.get(opts, :clock, :internal)) do
+      port = Keyword.get(opts, :port, 4001)
+      mode = Keyword.get(opts, :mode, Module.concat(ExProto.Mode, "P#{port}"))
+
       endpoint_opts =
         opts
         |> Keyword.take([:port, :scheme, :tls])
-        |> Keyword.merge(table: table, source: {Source.Exdrive, nil})
+        |> Keyword.merge(table: table, source: {Source.Exdrive, [mode: mode]}, mode: mode)
 
       Endpoint.start_link(endpoint_opts)
     end
