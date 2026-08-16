@@ -37,7 +37,7 @@ defmodule ExProto.Source.Exdrive do
   require Logger
 
   alias ExMo.Schema.Registry
-  alias ExMove.{FK, IK, JointState}
+  alias ExMove.{CartesianStream, FK, JointState}
 
   # CiA 402 states in which the drive accepts a setpoint. Everything else
   # discards it; see Exdrive.Drive.
@@ -234,35 +234,48 @@ defmodule ExProto.Source.Exdrive do
 
   # ── Cartesian jog ─────────────────────────────────────────────────────────
 
-  # Six joint velocities from one tool velocity, per assertion.
+  # An assertion, not a solve.
   #
-  # Seeded with where the arm is right now and nowhere else. Velocity IK is
-  # differential — it answers "how should the joints move from here" — which is
-  # exactly the property a jog needs: the arm stays on the configuration it is
-  # already in, and cannot flip elbow-up to elbow-down halfway through a move
-  # because a different solution scored better. That flip is a collision, and
-  # it is the reason a Cartesian jog is not "solve for a pose and go there".
+  # This used to compute six joint velocities per assertion and write them to the
+  # drives, which made the client's ~10 Hz assertion rate the interpolation rate
+  # of the arm. Those are unrelated numbers: one is a fact about the network and
+  # the other is a fact about the machine. At the 250 mm/s ISO 10218 allows in
+  # manual mode, interpolating at 10 Hz leaves the commanded line by more than a
+  # centimetre.
+  #
+  # So what an assertion does now is refresh an intent — a frame, a direction and
+  # a speed — on `ExMove.CartesianStream`, which re-solves from the arm's live
+  # joint positions at its own rate. The watchdog above still guards the hold; it
+  # has just stopped doubling as the interpolator.
+  #
+  # Velocity IK stays the method, and for the same reason as before: it is
+  # differential, so the arm cannot flip elbow-up to elbow-down partway through
+  # because a different solution scored better. That flip is a collision.
   defp jog_cartesian(args) do
     with {:ok, "base"} <- frame(args),
-         {:ok, twist} <- twist(args),
-         chain = Registry.arm_chain(),
-         {:ok, positions} <- joint_positions(chain),
-         :ok <- all_enabled(chain),
-         {:ok, %JointState{velocities: dq}} <-
-           IK.solve_velocity(chain, %JointState{positions: positions}, twist) do
-      apply_joint_velocities(chain, scale(dq))
-      :ok
+         {:ok, twist} <- twist(args) do
+      chain = Registry.arm_chain()
+
+      # Zero is a stop, and it is the value the watchdog asserts when the
+      # operator lets go or the link drops. Releasing the stream commands zero on
+      # every joint on the way out, which is what makes the button feel attached
+      # to the machine. What stops the arm when nothing is sent at all is one
+      # layer further down, and is not this.
+      if stopped?(twist) do
+        CartesianStream.release(chain)
+      else
+        case CartesianStream.hold(chain, twist) do
+          :ok -> :ok
+          {:error, _reason} -> {:error, :rejected}
+        end
+      end
     else
-      # Not obeyed, and not silently approximated either. Near a singularity the
-      # joint rates that would hold a constant tool speed go to infinity, and
-      # the damped solve that avoids dividing by zero produces rates nobody
-      # asked for. Refusing puts the operator back on joint jog, which is the
-      # only way out of a singularity anyway.
-      {:error, :singular} -> {:error, :rejected}
       {:error, reason} -> {:error, reason}
       {:ok, _other_frame} -> {:error, :rejected}
     end
   end
+
+  defp stopped?(twist), do: Enum.all?(twist, &(&1 == 0.0))
 
   defp frame(args) do
     case Map.get(args, "frame") || "base" do
@@ -284,47 +297,6 @@ defmodule ExProto.Source.Exdrive do
         _unknown -> {:error, :rejected}
       end
     end
-  end
-
-  # Every joint scaled by the same factor, not each clamped to the limit.
-  #
-  # Clamping per joint changes the ratios between them, and the ratios are the
-  # direction: an arm whose fastest joint is clipped and whose others are not
-  # travels somewhere other than where the operator pointed, slowly and
-  # confidently. Scaling the whole vector keeps the tool on the commanded line
-  # and just makes it slower, which is what "too fast" should mean.
-  defp scale(dq) do
-    peak = dq |> Enum.map(&abs/1) |> Enum.max()
-
-    if peak > @max_jog_velocity do
-      factor = @max_jog_velocity / peak
-      Enum.map(dq, &(&1 * factor))
-    else
-      dq
-    end
-  end
-
-  defp all_enabled(chain) do
-    Enum.reduce_while(chain.axis_ids, :ok, fn axis_id, :ok ->
-      case status(Atom.to_string(axis_id)) do
-        {:ok, %{state: :operation_enabled}} -> {:cont, :ok}
-        {:ok, _not_enabled} -> {:halt, {:error, :rejected}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp apply_joint_velocities(chain, velocities) do
-    chain.axis_ids
-    |> Enum.zip(velocities)
-    |> Enum.each(fn {axis_id, velocity} ->
-      axis = Atom.to_string(axis_id)
-
-      with {:ok, status} <- status(axis),
-           {:ok, _mode} <- ensure_velocity_mode(axis, status) do
-        Exdrive.Drive.set_target_velocity(axis, velocity)
-      end
-    end)
   end
 
   # ── Projection: drive status → model nodes ────────────────────────────────
