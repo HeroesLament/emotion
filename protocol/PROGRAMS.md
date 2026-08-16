@@ -1,7 +1,7 @@
-# Programs, points and frames
+# Programs, points, frames and tools
 
-What a stored program is, what a taught point is, why frames come first, and
-where code is allowed to live.
+What a stored program is, what a taught point is, why frames come first, what
+makes a tool swappable, and where code is allowed to live.
 
 Written before any of it exists, because the last document in this directory was
 written the same way and its first two sections turned out to be wrong in ways a
@@ -121,7 +121,8 @@ would make opening a file a way to change a machine.
     Studio                          Controller
     ─────────                       ──────────
     block editor (primary)          frames        ← authoritative
-    teaching (secondary)            points        ← authoritative
+    teaching (secondary)            tools         ← authoritative
+                                    points        ← authoritative
     text export (third)             programs      ← authoritative
     extension SDK ───deploy──────►  extensions    ← authoritative
     a cached copy ───push/pull───►  execution
@@ -158,12 +159,58 @@ Not in scope here, and named so they are not accidentally designed out:
     fixture on a positioner is described. Every vendor has it. Adding a parent
     reference later is cheap; assuming there is never one is not.
 
-## 2. Points
+## 2. Tools, and swappable EOATs
 
-A taught point is **a pose, the frame it was taught in, and the joint solution
-the arm was actually in**.
+A tool is six numbers and a name, exactly as a frame is — the transform from the
+last link's flange to the tool centre point. Structurally it is the same table
+with a different meaning, and the temptation to unify them should be resisted:
+they are looked up by different questions, they are re-taught by different
+procedures, and a point references one of each.
 
-The third of those is where we can do better than the incumbents rather than
+Today the tool is a **field on `ExMove.Chain`**, plumbed through to the NIF
+earlier as `tool: (f64,f64,f64,f64,f64,f64)`. That is compile-time geometry. It
+has to become a row, and the moment it does, the concept the arm has been missing
+falls out: **the fitted tool is machine state, not a constant.**
+
+That is what makes an end-of-arm tool swappable, and the general programming
+consequences are worth naming now even though nothing at the effector is being
+designed yet:
+
+  * **A taught point knows which tool was fitted.** This is not optional and it
+    is not an optimisation. FANUC records `UTOOL` alongside `UFRAME` with every
+    taught position for exactly one reason: a pose taught with one tool fitted
+    does not describe the same physical location with another. A point stored
+    without its tool is a point that silently means something else after a
+    changeover. `tool_id` is therefore as mandatory on a point as `frame_id`.
+  * **Something selects the fitted tool.** A statement kind — `set_tool` — and a
+    program-level default, in the same way a frame is selected. Selection is
+    state that outlives the statement, which means it is also state a program
+    must not inherit accidentally from whatever ran before it.
+  * **A mismatch is detectable, and detected early.** Replaying a point taught
+    with tool A while tool B is fitted is the failure this model exists to catch.
+    Because both are rows with real foreign keys, the check is a comparison, and
+    it belongs where the statement is *stored* and again where it is *reached* —
+    the first catches authoring, the second catches a changeover nobody told the
+    controller about.
+  * **The Cartesian limits already follow the tool.** `CARTESIAN.md`'s 250 mm/s
+    cap is a cap on TCP speed, and TCP is a function of the fitted tool. Swapping
+    to a longer tool changes the achievable joint rates for the same tool speed
+    with no other change in the program. This is not new work — the Jacobian
+    already takes the tool — but it is the reason the fitted tool must be known
+    to the *stream*, not only to the program.
+
+Deliberately not in scope, and named so they are not designed out: tool mass and
+inertia (needed for payload and for collaborative force limits), tool I/O and its
+signal namespace, a tool changer as a commanded device, and tool-frame hierarchy
+for a multi-station effector. All of them are additional columns or additional
+tables on a `tools` row that exists; none of them are possible without it.
+
+## 3. Points
+
+A taught point is **a pose, the frame it was taught in, the tool that was
+fitted, and the joint solution the arm was actually in**.
+
+The fourth of those is where we can do better than the incumbents rather than
 merely matching them. ABB encodes a discrete configuration index — quadrant and
 turn counters — because RAPID has to describe a branch compactly. We have the
 whole joint vector at teach time and can simply store it, six floats, and seed
@@ -177,7 +224,7 @@ replay seeds from the taught solution and stays on that branch, while offline
 Points are named. Whether they are program-local, global, or both is an open
 question below — every vendor ended up with both, which is a hint.
 
-## 3. Programs: three layers
+## 4. Programs: three layers
 
 The authoring order is decided: **Studio blocks first, teaching second, text
 third.** Everything in this section follows from that, and from the second of
@@ -189,7 +236,7 @@ A program is a sequence of **statements**, and a statement is a record: a kind,
 and typed arguments. Drag-and-drop editing is the primary way they are authored,
 which settles a question this document previously left open — you cannot
 drag-and-drop text, so the structure is authoritative and any text form is a
-rendering of it. See §6.
+rendering of it. See §7.
 
 The starting kinds, deliberately few:
 
@@ -299,7 +346,7 @@ statement it is on, its fault — and the body itself is uploaded and downloaded
 over HTTP as a canonical serialisation. A program of a thousand statements does
 not belong in a JSON-RPC frame competing with a 30 Hz position stream.
 
-## 4. The parallel logic context
+## 5. The parallel logic context
 
 Every incumbent has one. We should not build a ladder editor, and we should not
 assume the motion program owns the machine either — because that assumption is
@@ -312,7 +359,7 @@ What matters now is only that the program model does not assume it is the sole
 executing context: nothing may claim the arm implicitly, and holds stay the way
 motion is claimed.
 
-## 5. G-code is an importer
+## 6. G-code is an importer
 
 G-code is the CAM lineage: it streams coordinates, with no named points, no
 frames, no per-line termination and no logic. Every vendor supports it as an
@@ -323,12 +370,12 @@ import path and none uses it as the native model.
 `%Frame{}`, because a stream of frames goes around the queue and therefore around
 every limit and every report that `CARTESIAN.md` spent its length establishing.
 
-Behaviours are not in this section any more. They are layer 3 of §3.
+Behaviours are not in this section any more. They are layer 3 of §4.
 
-## 6. Storage, and the text question resolved
+## 7. Storage, and the text question resolved
 
-**One controller database.** Frames, points, programs and registered extensions
-join accounts and tokens in the existing repo. One file to back up — and `backup`
+**One controller database.** Frames, tools, points, programs and registered
+extensions join accounts and tokens in the existing repo. One file to back up — and `backup`
 is already a declared grant — one migration path, one thing to get right on a
 Nerves image. `ExAuth.Repo` then outgrows its name and should be renamed the
 moment the first non-credential table lands, not two months later at a hundred
@@ -337,6 +384,66 @@ call sites.
 Statements are **rows**, not a blob: `(program_id, seq, kind, args)` with foreign
 keys to points and frames. Typed sockets make those keys real, which is what
 allows the database itself to refuse to delete a frame a program still uses.
+
+### The schema
+
+    frames          id, name, parent_id?, x y z rx ry rz, mutable
+    tools           id, name, x y z rx ry rz
+    points          id, name, program_id?, frame_id, tool_id, pose[6], joints[6],
+                    mutable
+    programs        id, name
+    statements      id, program_id, parent_id?, seq, kind, args_json
+    statement_refs  statement_id, arg_name, → points | frames | tools | programs
+    extensions      id, name, version, module
+
+Seven tables, and every one of them is a decision that was argued for above
+rather than a shape that fell out of an ORM:
+
+  * **`id` for identity, `seq` for order.** Renumbering a program must not
+    invalidate a jump, which is precisely what FANUC's `JMP LBL[]` — a label, not
+    a line number — exists to avoid. Inserting a statement rewrites `seq`; it
+    never touches an `id`.
+  * **Literals in `args_json`, references in `statement_refs`.** A feedrate is a
+    number and belongs in the row. A point is an entity, and putting its id in
+    JSON makes the foreign key a comment. Splitting them is what turns "refuse to
+    delete a frame a program uses" from a policy into a constraint.
+  * **`kind` is a validated string, not an enum.** Validated against the live
+    registry (§4), so a program that references an extension whose module is not
+    loaded still *loads*, and names the kind it is missing. An enum in a
+    migration would make every extension a schema change.
+  * **`parent_id` on statements is nullable and unused today.** Nesting is
+    deferred, not designed out; adding the column later means migrating every
+    program that exists.
+  * **`mutable` on frames and points**, because the real axis is not private
+    against shared — it is **taught-constant against runtime-mutable**, which is
+    what FANUC's `P[]`/`PR[]` split actually encodes. A vision offset writes a
+    mutable frame; a taught fixture origin is not writable at line rate by
+    anything. The grant follows the column.
+  * **`program_id` nullable on points** is the global/local question left open
+    above, resolved as a column rather than as two tables.
+
+Argument types carry **physical dimension**, not just primitive type:
+`:velocity`, `:length`, `:angle`, `:duration`, `:point`, `:frame`, `:tool`,
+`:signal`. A block editor that knows a socket wants a velocity can offer units;
+one that knows it wants a `:tool` can offer the fitted one first.
+
+### What this schema does not yet answer
+
+Four gaps, recorded rather than discovered later:
+
+  1. **The robot itself has no data model.** `ExMove.Library.demo()` is hardcoded
+     and there is no URDF loader. This is the one that bites immediately: if the
+     chain is compile-time and frames are rows, half the cell's geometry lives in
+     a database and half lives in a release, and re-teaching a tool becomes a
+     deploy. Doing tools as rows forces this question rather than deferring it.
+  2. **No signals.** `wait until` and `set` both need a named I/O namespace, and
+     `statement_refs` already has a column pointing at a table that does not
+     exist.
+  3. **No variables.** Counters and part indices are the first thing anyone asks
+     for after motion works, and they are also the doorway the expression
+     language walks through.
+  4. **Point scope and mutability**, resolved above as columns, but untested —
+     the migration is cheap and the semantics are not.
 
 ### Why structure is authoritative and text is a rendering
 
@@ -372,7 +479,7 @@ Migration runs the same way round. Structure to text later is a printer over the
 whole corpus and cannot fail; text to structure later is a parser over programs
 people have hand-edited for years, some of which will not parse.
 
-## 7. Studio
+## 8. Studio
 
 **Blocks are day one and primary.** A block editor is a tree editor, which is
 what a widget toolkit is good at, and Cedar exists.
@@ -381,7 +488,7 @@ what a widget toolkit is good at, and Cedar exists.
 the joint vector. Cobot-style hand guiding is the same operation with a different
 input device.
 
-**Text is third and is an export**, per §6.
+**Text is third and is an export**, per §7.
 
 **The Elixir SDK is a build-and-deploy loop, not a text editor.** Studio
 scaffolds an extension project, builds it, deploys it to a controller, runs it
@@ -400,7 +507,7 @@ If an in-app editor is wanted later, it is for **extensions only, never for
 programs**, and it comes after blocks. It is an IDE feature that happens to live
 in a robot tool and should be scheduled as one.
 
-## 8. How we would know it is finished
+## 9. How we would know it is finished
 
 The tests are the specification, and the first one is the one that makes frames
 worth having:
@@ -412,6 +519,12 @@ worth having:
     ways, replay it, and assert the arm is in the joint solution it was taught
     in and not the mirror of it. This is the test that fails without the taught
     joint vector, and it is the one ABB's `confdata` exists for.
+  * **Re-teaching a tool moves its points too, and only in the tool's own
+    direction.** The frame test's mirror image, and the one that proves a tool is
+    a transform rather than a label.
+  * **A point taught with one tool is refused, or corrected, under another.**
+    Whichever we choose, it must not be *ignored*. This is the swappable-EOAT
+    test and the reason `tool_id` is on every point.
   * **An offset shifts the path by exactly the offset.** The vision case, without
     a camera: apply a known offset to a frame and assert every point in it moved
     by that much and no more.
@@ -434,25 +547,30 @@ worth having:
 
 1. **User frames.** Smallest, and everything else references them. Vision is the
    reason to do them first rather than last.
-2. **Points**, with the frame reference and the taught joint solution.
-3. **The statement-kind registry**, with the built-in kinds registered through
+2. **Tools**, in the same stroke: the same six numbers, and the move of the
+   chain's compile-time `tool` field into a row that the stream reads.
+3. **Points**, with the frame reference, the tool reference and the taught joint
+   solution.
+4. **The statement-kind registry**, with the built-in kinds registered through
    it. Cheap now, expensive later.
-4. **Program storage** — statements as rows, HTTP body transfer, model nodes for
+5. **Program storage** — statements as rows, HTTP body transfer, model nodes for
    state. The printer lands here.
-5. **Program execution** — the process that fills the queue, and the mode
+6. **Program execution** — the process that fills the queue, and the mode
    interlock in its second direction.
-6. **Blocks in Studio**, against the registry.
-7. **Extensions**: behaviours re-homed as registered statement kinds, and the
+7. **Blocks in Studio**, against the registry.
+8. **Extensions**: behaviours re-homed as registered statement kinds, and the
    deploy loop.
-8. Expressions, branching, G-code import, dynamic frames, frame hierarchy, the
-   parallel logic context.
+9. Expressions, branching, G-code import, dynamic frames, frame hierarchy, the
+   parallel logic context, signals and variables.
 
 ## Open questions
 
-- **Points global or program-local.** Everyone ended up with both — FANUC's `P[]`
-  against `PR[]`, Yaskawa's local against global position variables. Starting
-  with program-local only is the smaller thing, and the migration to both is a
-  nullable column.
+- **Where the arm's own geometry lives**, which the `tools` table forces. Gap 1
+  in §7 and the largest thing still unanswered in this document.
+- **What happens when a point is replayed under the wrong tool** — refuse, or
+  recompute the pose through the new tool and go there. Refusing is safe and
+  annoying; recomputing is convenient and can move the arm somewhere nobody
+  taught. Probably refuse by default with an explicit statement-level opt-in.
 - **What grant deploys an extension.** It installs code that runs in the
   controller's VM, which is closer to firmware than to `edit_program`. Probably
   its own grant, granted alone, in the way `configure_safety` already is.
