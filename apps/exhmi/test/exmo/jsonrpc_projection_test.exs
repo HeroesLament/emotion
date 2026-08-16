@@ -55,10 +55,11 @@ defmodule ExMo.Projection.JSONRPCTest do
       names = table |> JSONRPC.children("axes") |> Elixir.Enum.map(& &1.name)
 
       # The joints in order, then the point at the end of them, then what the
-      # controller is making of the Cartesian motion, then the one command that
-      # moves all six at once. A pendant draws this list top to bottom, so J3
-      # appearing above J2 would be a real bug rather than a cosmetic one.
-      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP Cartesian JogCartesian)
+      # controller is making of the Cartesian motion, then the two commands that
+      # move all six at once — the held one and the one with an end in it. A
+      # pendant draws this list top to bottom, so J3 appearing above J2 would be
+      # a real bug rather than a cosmetic one.
+      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP Cartesian JogCartesian MoveLinear)
     end
   end
 

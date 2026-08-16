@@ -163,7 +163,7 @@ defmodule ExMo.Schema.Registry do
           "in radians, velocities in rad/s, the tool in metres.",
       children:
         Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1) ++
-          [tcp_object(), cartesian_motion_object(), cartesian_jog()]
+          [tcp_object(), cartesian_motion_object(), cartesian_jog(), move_linear()]
     }
   end
 
@@ -311,6 +311,90 @@ defmodule ExMo.Schema.Registry do
             }
           end
         )
+    }
+  end
+
+  # ── move_linear ───────────────────────────────────────────────────────────
+
+  # Not held, and the contrast with the jog beside it is the point.
+  #
+  # A jog is an assertion that somebody is still holding a button, so it needs a
+  # deadline and dies without one. A move has an end in it — the arrival — and
+  # needs nothing to keep talking for it to finish. That is also the thing to be
+  # careful about: a client that disappears mid-move does not stop the arm, and
+  # anyone who wants it stopped sends something else on the same object.
+  #
+  # No queue. This build has none, so a second move replaces the first rather
+  # than following it. Termination and blending — whether a move settles on its
+  # point or rounds through it — are what a queue is for, and are a separate
+  # document.
+  defp move_linear do
+    %Method{
+      id: "axes.move_linear",
+      name: "MoveLinear",
+      description:
+        "Move the tool centre point in a straight line to a pose, and stop " <>
+          "there. Unlike a jog this is not held: it is sent once and runs to " <>
+          "completion, and nothing needs to keep asserting for it to finish — " <>
+          "which also means a client that vanishes mid-move does not stop the " <>
+          "arm. Translation and rotation are synchronised, so whichever needs " <>
+          "longer sets the pace and both arrive together. Solved on the " <>
+          "controller's clock from the arm's live pose, under the same rate " <>
+          "ceiling, joint limits and tool speed cap as a jog; watch " <>
+          "`axes.cartesian` for what it is making of the motion, including " <>
+          "`done` when it has arrived. There is no motion queue in this build, " <>
+          "so a second move replaces the first rather than following it.",
+      async: true,
+      call_grant: :write_setpoint,
+      input_args: [
+        %Argument{
+          name: "x",
+          type: :double,
+          required: true,
+          description: "Target tool position along base X, metres"
+        },
+        %Argument{
+          name: "y",
+          type: :double,
+          required: true,
+          description: "Target tool position along base Y, metres"
+        },
+        %Argument{
+          name: "z",
+          type: :double,
+          required: true,
+          description: "Target tool position along base Z, metres"
+        },
+        %Argument{
+          name: "rx",
+          type: :double,
+          required: false,
+          description:
+            "Target tool roll about base X, radians. Omit all three rotations " <>
+              "to keep the orientation the arm already has."
+        },
+        %Argument{
+          name: "ry",
+          type: :double,
+          required: false,
+          description: "Target tool pitch about base Y, radians"
+        },
+        %Argument{
+          name: "rz",
+          type: :double,
+          required: false,
+          description: "Target tool yaw about base Z, radians"
+        },
+        %Argument{
+          name: "feedrate",
+          type: :double,
+          required: false,
+          description:
+            "Tool speed along the path, m/s. Capped at the mode's tool speed " <>
+              "limit — 250 mm/s in manual per ISO 10218 — by scaling rather " <>
+              "than by refusing."
+        }
+      ]
     }
   end
 

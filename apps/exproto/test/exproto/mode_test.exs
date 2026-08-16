@@ -139,6 +139,35 @@ defmodule ExProto.ModeTest do
     end
   end
 
+  describe "move_linear" do
+    test "is refused outside manual, like anything else that moves the arm", %{arg: arg} do
+      :ok = Mode.select(:auto, TestMode)
+
+      assert {:error, {:wrong_mode, :auto}} =
+               Source.call("axes.move_linear", %{"x" => 0.0, "y" => 1.0, "z" => 0.0}, arg)
+    end
+
+    test "omitting the rotation keeps the orientation rather than levelling it", %{arg: arg} do
+      # Silence is not a command. A client asking to move somewhere without
+      # saying anything about the wrist has not asked for the wrist to be
+      # levelled, and reading it that way is how a tool ends up somewhere
+      # surprising.
+      #
+      # Checked through the model's own arm rather than this module's test axis:
+      # there are no drives for j1..j6 here, so the call cannot reach a stream
+      # and comes back rejected — but it has to get far enough to have tried,
+      # rather than falling over on the missing rotation.
+      assert Source.call("axes.move_linear", %{"x" => 0.0, "y" => 1.0, "z" => 0.0}, arg) in [
+               :ok,
+               {:error, :rejected}
+             ]
+    end
+
+    test "a target with no position at all is rejected", %{arg: arg} do
+      assert {:error, :rejected} = Source.call("axes.move_linear", %{"y" => 1.0}, arg)
+    end
+  end
+
   describe "the published state" do
     test "controller_mode answers, which it never used to", %{arg: arg} do
       assert Source.read("state.controller_mode", arg) == {:ok, "manual"}

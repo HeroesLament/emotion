@@ -37,7 +37,7 @@ defmodule ExProto.Source.Exdrive do
   require Logger
 
   alias ExMo.Schema.Registry
-  alias ExMove.{CartesianStream, FK, IK, JointState}
+  alias ExMove.{CartesianStream, FK, Frame, IK, JointState}
   alias ExProto.Mode
 
   # CiA 402 states in which the drive accepts a setpoint. Everything else
@@ -290,6 +290,7 @@ defmodule ExProto.Source.Exdrive do
 
   @impl ExProto.Source
   def call("axes.jog_cartesian", args, arg), do: jog_cartesian(args, arg)
+  def call("axes.move_linear", args, arg), do: move_linear(args, arg)
 
   def call(node_id, args, arg) do
     case parse(node_id) do
@@ -376,6 +377,30 @@ defmodule ExProto.Source.Exdrive do
   defp ensure_position_mode(_axis, %{mode: :homing} = _status), do: {:ok, :homing}
   defp ensure_position_mode(axis, _status), do: set_mode(axis, :profile_position)
 
+  # ── The tool speed limit, keyed to the mode ───────────────────────────────
+
+  # 250 mm/s in manual, per ISO 10218. Auto is a machine running a program with
+  # nobody's hands near it, and the number that belongs there is a property of
+  # the cell rather than of the standard — this is a placeholder for one that
+  # arrives with configuration.
+  #
+  # Passed down rather than read up: the stream lives in `exmove`, which knows
+  # nothing about modes or protocols and should not learn. The layer that knows
+  # the mode is the layer that tells it the number.
+  @manual_tool_velocity 0.25
+  @auto_tool_velocity 1.0
+
+  defp tool_speed_limit(arg) do
+    case Mode.selected(mode_server(arg)) do
+      :auto -> @auto_tool_velocity
+      _manual_or_idle -> @manual_tool_velocity
+    end
+  end
+
+  # Half the manual limit. A move with no feedrate given is somebody who has not
+  # thought about speed, and the answer to that is not "as fast as allowed".
+  @default_feedrate 0.125
+
   # A manual-mode speed limit, and a functional one: the constraint that
   # actually matters is the 250 mm/s ISO 10218 puts on the tool centre point,
   # which needs the whole kinematic chain to evaluate and belongs in a
@@ -432,7 +457,10 @@ defmodule ExProto.Source.Exdrive do
       if stopped?(twist) do
         CartesianStream.release(chain)
       else
-        case CartesianStream.hold(chain, twist, frame: frame) do
+        case CartesianStream.hold(chain, twist,
+               frame: frame,
+               max_tool_velocity: tool_speed_limit(arg)
+             ) do
           :ok -> :ok
           {:error, _reason} -> {:error, :rejected}
         end
@@ -443,6 +471,68 @@ defmodule ExProto.Source.Exdrive do
   end
 
   defp stopped?(twist), do: Enum.all?(twist, &(&1 == 0.0))
+
+  # ── move_linear ───────────────────────────────────────────────────────────
+
+  # A pose and a feedrate, handed to the same stream the jog uses.
+  #
+  # Gated on mode like a jog, and for the same reason — this moves the arm, and
+  # whether the machine is in a state where it should be moving is not a question
+  # the client gets to answer. Not gated on a *neutral* exception, because there
+  # is no such thing here: a move has no zero, and the way to stop one is `stop`.
+  defp move_linear(args, arg) do
+    with :ok <- Mode.allows_jog?(mode_server(arg)),
+         {:ok, target} <- target_frame(args),
+         {:ok, feedrate} <- feedrate(args) do
+      chain = Registry.arm_chain()
+
+      case CartesianStream.move_linear(chain, target,
+             feedrate: feedrate,
+             max_tool_velocity: tool_speed_limit(arg)
+           ) do
+        :ok -> :ok
+        {:error, _reason} -> {:error, :rejected}
+      end
+    end
+  end
+
+  # Rotation is optional, and omitting it means "keep the orientation you have"
+  # rather than "go to zero". A client asking to move somewhere without saying
+  # anything about the wrist has not asked for the wrist to be levelled, and
+  # reading silence as a command is how a tool ends up somewhere surprising.
+  defp target_frame(args) do
+    with {:ok, x} <- as_float(args["x"]),
+         {:ok, y} <- as_float(args["y"]),
+         {:ok, z} <- as_float(args["z"]) do
+      chain = Registry.arm_chain()
+
+      case {args["rx"], args["ry"], args["rz"]} do
+        {nil, nil, nil} ->
+          case joint_positions(chain) do
+            {:ok, positions} ->
+              here = FK.solve(chain, %JointState{positions: positions})
+              {:ok, %Frame{here | x: x, y: y, z: z}}
+
+            {:error, reason} ->
+              {:error, reason}
+          end
+
+        {rx, ry, rz} ->
+          with {:ok, rx} <- as_float(rx),
+               {:ok, ry} <- as_float(ry),
+               {:ok, rz} <- as_float(rz) do
+            {:ok, %Frame{x: x, y: y, z: z, rx: rx, ry: ry, rz: rz}}
+          end
+      end
+    end
+  end
+
+  defp feedrate(args) do
+    case args["feedrate"] do
+      nil -> {:ok, @default_feedrate}
+      value -> as_float(value)
+    end
+  end
 
   # Refused rather than quietly treated as base, which is the whole reason the
   # argument is worth having. An operator who selects USER on a pendant and gets

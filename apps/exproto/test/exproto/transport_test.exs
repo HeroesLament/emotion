@@ -295,12 +295,12 @@ defmodule ExProto.TransportTest do
       {conn, websocket, browse} = request(conn, ref, websocket, "nodes/browse", %{"nodeId" => "axes"}, 2)
 
       # Six joints, the tool centre point they place, what the controller is
-      # making of the Cartesian motion, and the one command that moves all six
-      # at once. Named rather than counted: a count that goes up is a test that
-      # gets its number bumped without anyone looking at what arrived.
+      # making of the Cartesian motion, and the two commands that move all six at
+      # once. Named rather than counted: a count that goes up is a test that gets
+      # its number bumped without anyone looking at what arrived.
       assert Enum.map(browse["result"]["children"], & &1["nodeId"]) ==
                ~w(axes.j1 axes.j2 axes.j3 axes.j4 axes.j5 axes.j6 axes.tcp
-                  axes.cartesian axes.jog_cartesian)
+                  axes.cartesian axes.jog_cartesian axes.move_linear)
 
       {_conn, _websocket, read} =
         request(conn, ref, websocket, "nodes/read", %{"nodeIds" => ["axes.j1.position"]}, 3)
