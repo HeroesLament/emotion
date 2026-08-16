@@ -59,7 +59,7 @@ defmodule ExMo.Projection.JSONRPCTest do
       # move all six at once — the held one and the one with an end in it. A
       # pendant draws this list top to bottom, so J3 appearing above J2 would be
       # a real bug rather than a cosmetic one.
-      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP Cartesian JogCartesian MoveLinear)
+      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP Cartesian JogCartesian MoveLinear MoveArc)
     end
   end
 

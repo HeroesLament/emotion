@@ -300,7 +300,7 @@ defmodule ExProto.TransportTest do
       # its number bumped without anyone looking at what arrived.
       assert Enum.map(browse["result"]["children"], & &1["nodeId"]) ==
                ~w(axes.j1 axes.j2 axes.j3 axes.j4 axes.j5 axes.j6 axes.tcp
-                  axes.cartesian axes.jog_cartesian axes.move_linear)
+                  axes.cartesian axes.jog_cartesian axes.move_linear axes.move_arc)
 
       {_conn, _websocket, read} =
         request(conn, ref, websocket, "nodes/read", %{"nodeIds" => ["axes.j1.position"]}, 3)

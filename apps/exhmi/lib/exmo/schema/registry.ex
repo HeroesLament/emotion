@@ -13,16 +13,16 @@ defmodule ExMo.Schema.Registry do
   @doc "Returns the uncompiled root model with all registered fragments."
   @spec base_model() :: Model.t()
   def base_model do
-    rpp_def     = RemovePreviousPrint.definition()
+    rpp_def = RemovePreviousPrint.definition()
     rpp_catalog = FromBehavior.catalog_object(rpp_def)
     rpp_runtime = FromBehavior.runtime_properties(rpp_def)
 
     %Model{
-      id:      "exmo",
-      name:    "ExMo Information Model",
+      id: "exmo",
+      name: "ExMo Information Model",
       version: "0.1.0",
-      types:   base_types(),
-      root:    root_object(rpp_catalog, rpp_runtime)
+      types: base_types(),
+      root: root_object(rpp_catalog, rpp_runtime)
     }
   end
 
@@ -31,8 +31,8 @@ defmodule ExMo.Schema.Registry do
   defp base_types do
     %{
       "type.axis_state" => %Enum{
-        id:          "type.axis_state",
-        name:        "AxisState",
+        id: "type.axis_state",
+        name: "AxisState",
         description:
           "Axis state, in one vocabulary across every interface E-Motion drives " <>
             "— CiA 402 servo, step/dir stepper, PWM servo. `ready` is energised " <>
@@ -40,8 +40,8 @@ defmodule ExMo.Schema.Registry do
         values: ExMo.Schema.FromAxis.states()
       },
       "type.behavior_phase" => %Enum{
-        id:          "type.behavior_phase",
-        name:        "BehaviorPhase",
+        id: "type.behavior_phase",
+        name: "BehaviorPhase",
         description: "Public phase of an executing behavior. Coarser than internal FSM states.",
         values: [
           "idle",
@@ -66,8 +66,8 @@ defmodule ExMo.Schema.Registry do
 
   defp root_object(rpp_catalog, rpp_runtime) do
     %Object{
-      id:       "exmo",
-      name:     "ExMo",
+      id: "exmo",
+      name: "ExMo",
       children: [
         axes_object(),
         behaviors_object(rpp_catalog, rpp_runtime),
@@ -79,17 +79,17 @@ defmodule ExMo.Schema.Registry do
 
   defp behaviors_object(rpp_catalog, rpp_runtime) do
     %Object{
-      id:       "behaviors",
-      name:     "Behaviors",
+      id: "behaviors",
+      name: "Behaviors",
       children: [
         %Object{
-          id:       "behaviors.catalog",
-          name:     "Catalog",
+          id: "behaviors.catalog",
+          name: "Catalog",
           children: [rpp_catalog]
         },
         %Object{
-          id:       "behaviors.runtime",
-          name:     "Runtime",
+          id: "behaviors.runtime",
+          name: "Runtime",
           children: [active_behavior_object(rpp_runtime)]
         }
       ]
@@ -98,10 +98,10 @@ defmodule ExMo.Schema.Registry do
 
   defp active_behavior_object(runtime_props) do
     %Object{
-      id:          "behaviors.runtime.active_behavior",
-      name:        "ActiveBehavior",
+      id: "behaviors.runtime.active_behavior",
+      name: "ActiveBehavior",
       description: "Live state of the currently executing behavior. Fields are nil when idle.",
-      children:    runtime_props
+      children: runtime_props
     }
   end
 
@@ -114,18 +114,60 @@ defmodule ExMo.Schema.Registry do
   # `display_unit: :degrees` is a hint to whatever renders these for a human.
   # It does not change the values, which are radians everywhere.
   @arm_axes [
-    %{id: "axes.j1", name: "J1", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
-      display_unit: :degrees, description: "Shoulder pan"},
-    %{id: "axes.j2", name: "J2", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
-      display_unit: :degrees, description: "Shoulder lift"},
-    %{id: "axes.j3", name: "J3", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
-      display_unit: :degrees, description: "Elbow"},
-    %{id: "axes.j4", name: "J4", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
-      display_unit: :degrees, description: "Wrist 1"},
-    %{id: "axes.j5", name: "J5", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
-      display_unit: :degrees, description: "Wrist 2"},
-    %{id: "axes.j6", name: "J6", type: :rotary, limits: {-3.05, 3.05}, home_pos: 0.0,
-      display_unit: :degrees, description: "Wrist 3"}
+    %{
+      id: "axes.j1",
+      name: "J1",
+      type: :rotary,
+      limits: {-3.05, 3.05},
+      home_pos: 0.0,
+      display_unit: :degrees,
+      description: "Shoulder pan"
+    },
+    %{
+      id: "axes.j2",
+      name: "J2",
+      type: :rotary,
+      limits: {-3.05, 3.05},
+      home_pos: 0.0,
+      display_unit: :degrees,
+      description: "Shoulder lift"
+    },
+    %{
+      id: "axes.j3",
+      name: "J3",
+      type: :rotary,
+      limits: {-3.05, 3.05},
+      home_pos: 0.0,
+      display_unit: :degrees,
+      description: "Elbow"
+    },
+    %{
+      id: "axes.j4",
+      name: "J4",
+      type: :rotary,
+      limits: {-3.05, 3.05},
+      home_pos: 0.0,
+      display_unit: :degrees,
+      description: "Wrist 1"
+    },
+    %{
+      id: "axes.j5",
+      name: "J5",
+      type: :rotary,
+      limits: {-3.05, 3.05},
+      home_pos: 0.0,
+      display_unit: :degrees,
+      description: "Wrist 2"
+    },
+    %{
+      id: "axes.j6",
+      name: "J6",
+      type: :rotary,
+      limits: {-3.05, 3.05},
+      home_pos: 0.0,
+      display_unit: :degrees,
+      description: "Wrist 3"
+    }
   ]
 
   @doc "The registered axis specs, for tests and for whoever wires the drives."
@@ -156,14 +198,20 @@ defmodule ExMo.Schema.Registry do
   # and a hold on it has to cover every joint underneath.
   defp axes_object do
     %Object{
-      id:          "axes",
-      name:        "Axes",
+      id: "axes",
+      name: "Axes",
       description:
         "The arm: its joints, and the tool centre point they place. Positions " <>
           "in radians, velocities in rad/s, the tool in metres.",
       children:
         Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1) ++
-          [tcp_object(), cartesian_motion_object(), cartesian_jog(), move_linear()]
+          [
+            tcp_object(),
+            cartesian_motion_object(),
+            cartesian_jog(),
+            move_linear(),
+            move_arc()
+          ]
     }
   end
 
@@ -280,13 +328,13 @@ defmodule ExMo.Schema.Registry do
     feedback? = Elixir.Enum.all?(@arm_axes, &FromAxis.feedback?(FromAxis.interface(&1)))
 
     %Object{
-      id:          "axes.tcp",
-      name:        "TCP",
+      id: "axes.tcp",
+      name: "TCP",
       description:
         "Tool centre point, by forward kinematics over the joints above. " <>
           "Position in metres, orientation in radians as fixed-axis roll, " <>
           "pitch and yaw.",
-      meta:        %{feedback: feedback?, frame: "base"},
+      meta: %{feedback: feedback?, frame: "base"},
       children:
         Elixir.Enum.map(
           [
@@ -299,15 +347,15 @@ defmodule ExMo.Schema.Registry do
           ],
           fn {id, name, unit, description} ->
             %Property{
-              id:          "axes.tcp.#{id}",
-              name:        name,
+              id: "axes.tcp.#{id}",
+              name: name,
               description: description,
-              type:        :double,
-              unit:        unit,
-              readable:    true,
-              writable:    false,
-              observable:  true,
-              meta:        %{feedback: feedback?}
+              type: :double,
+              unit: unit,
+              readable: true,
+              writable: false,
+              observable: true,
+              meta: %{feedback: feedback?}
             }
           end
         )
@@ -342,8 +390,9 @@ defmodule ExMo.Schema.Registry do
           "controller's clock from the arm's live pose, under the same rate " <>
           "ceiling, joint limits and tool speed cap as a jog; watch " <>
           "`axes.cartesian` for what it is making of the motion, including " <>
-          "`done` when it has arrived. There is no motion queue in this build, " <>
-          "so a second move replaces the first rather than following it.",
+          "`done` when it has arrived. Moves queue: a second one runs after " <>
+          "the first rather than replacing it. A jog clears the queue, because " <>
+          "an operator taking hold of the arm has taken hold of it.",
       async: true,
       call_grant: :write_setpoint,
       input_args: [
@@ -393,9 +442,84 @@ defmodule ExMo.Schema.Registry do
             "Tool speed along the path, m/s. Capped at the mode's tool speed " <>
               "limit — 250 mm/s in manual per ISO 10218 — by scaling rather " <>
               "than by refusing."
+        },
+        %Argument{
+          name: "blend",
+          type: :double,
+          required: false,
+          description:
+            "Radius in metres within which this move gives way to the next, " <>
+              "rounding the corner instead of settling in it. Omitted, the " <>
+              "move stops on its end point. These are the FINE and CNT " <>
+              "terminations every teach pendant shows per line. Ignored when " <>
+              "nothing is queued behind: rounding a corner into nothing is " <>
+              "just stopping short."
         }
       ]
     }
+  end
+
+  # ── move_arc ──────────────────────────────────────────────────────────────
+
+  # Three points, which is the form every teach pendant uses and the only one
+  # that can be taught by driving the arm somewhere three times.
+  defp move_arc do
+    %Method{
+      id: "axes.move_arc",
+      name: "MoveArc",
+      description:
+        "Move the tool centre point along a circular arc through a via point " <>
+          "to an end pose. The circle is the one through three points: where " <>
+          "the arm is when the move starts, the via point, and the end. Three " <>
+          "points that do not define a circle — collinear, or two of them the " <>
+          "same — are refused rather than approximated, because an arc that " <>
+          "quietly becomes a straight line is a program doing something other " <>
+          "than what it says. Otherwise identical to `move_linear`: not held, " <>
+          "queued behind whatever is running, under the same limits, and " <>
+          "reported through `axes.cartesian`.",
+      async: true,
+      call_grant: :write_setpoint,
+      input_args:
+        arc_point_args() ++
+          [
+            %Argument{
+              name: "feedrate",
+              type: :double,
+              required: false,
+              description:
+                "Tool speed along the arc, m/s. Capped at the mode's tool " <>
+                  "speed limit, by scaling rather than by refusing."
+            },
+            %Argument{
+              name: "blend",
+              type: :double,
+              required: false,
+              description:
+                "Radius in metres within which this move gives way to the " <>
+                  "next, rounding the corner instead of settling in it. " <>
+                  "Omitted, the move stops on its end point. These are the " <>
+                  "FINE and CNT terminations every teach pendant shows per " <>
+                  "line. Ignored when nothing is queued behind: rounding a " <>
+                  "corner into nothing is just stopping short."
+            }
+          ]
+    }
+  end
+
+  defp arc_point_args do
+    for {prefix, what} <- [{"via", "the point the arc passes through"}, {"", "the end pose"}],
+        {axis, label} <- [
+          {"x", "position along base X, metres"},
+          {"y", "position along base Y, metres"},
+          {"z", "position along base Z, metres"}
+        ] do
+      %Argument{
+        name: if(prefix == "", do: axis, else: prefix <> "_" <> axis),
+        type: :double,
+        required: true,
+        description: "#{String.capitalize(label)} of #{what}"
+      }
+    end
   end
 
   # ── What the Cartesian motion is actually doing ───────────────────────────
@@ -502,30 +626,50 @@ defmodule ExMo.Schema.Registry do
 
   defp printers_object do
     %Object{
-      id:       "printers",
-      name:     "Printers",
+      id: "printers",
+      name: "Printers",
       children: [k1c_01_object()]
     }
   end
 
   defp k1c_01_object do
     %Object{
-      id:          "printers.k1c_01",
-      name:        "K1C_01",
+      id: "printers.k1c_01",
+      name: "K1C_01",
       description: "Creality K1C printer, unit 01",
       children: [
-        %Property{id: "printers.k1c_01.ready_for_unload",    name: "ReadyForUnload",    type: :boolean, description: "True when printer has a completed job ready for plate removal"},
-        %Property{id: "printers.k1c_01.door_state",          name: "DoorState",         type: :string,  description: "Current door state: open | closed | fault"},
-        %Property{id: "printers.k1c_01.build_plate_present", name: "BuildPlatePresent", type: :boolean, description: "True if build plate is detected inside the printer"},
-        %Property{id: "printers.k1c_01.unload_lane_clear",   name: "UnloadLaneClear",   type: :boolean, description: "True if unload lane sensor indicates no obstruction"}
+        %Property{
+          id: "printers.k1c_01.ready_for_unload",
+          name: "ReadyForUnload",
+          type: :boolean,
+          description: "True when printer has a completed job ready for plate removal"
+        },
+        %Property{
+          id: "printers.k1c_01.door_state",
+          name: "DoorState",
+          type: :string,
+          description: "Current door state: open | closed | fault"
+        },
+        %Property{
+          id: "printers.k1c_01.build_plate_present",
+          name: "BuildPlatePresent",
+          type: :boolean,
+          description: "True if build plate is detected inside the printer"
+        },
+        %Property{
+          id: "printers.k1c_01.unload_lane_clear",
+          name: "UnloadLaneClear",
+          type: :boolean,
+          description: "True if unload lane sensor indicates no obstruction"
+        }
       ]
     }
   end
 
   defp state_object do
     %Object{
-      id:          "state",
-      name:        "State",
+      id: "state",
+      name: "State",
       description: "Top-level controller state",
       children: [
         %Property{
@@ -545,7 +689,12 @@ defmodule ExMo.Schema.Registry do
               "selector says, because an operator looking at a faulted machine " <>
               "is not helped by being told it is in manual."
         },
-        %Property{id: "state.fault_present",   name: "FaultPresent",   type: :boolean, description: "True if any active fault is present on the controller"}
+        %Property{
+          id: "state.fault_present",
+          name: "FaultPresent",
+          type: :boolean,
+          description: "True if any active fault is present on the controller"
+        }
       ]
     }
   end

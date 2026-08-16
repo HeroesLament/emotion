@@ -63,7 +63,9 @@ defmodule ExProto.Source.Exdrive do
     {cartesian_ids, rest} = Enum.split_with(rest, &cartesian?/1)
     {tcp_ids, axis_ids} = Enum.split_with(rest, &tcp?/1)
 
-    read_axes(axis_ids) ++ read_tcp(tcp_ids) ++ read_cartesian(cartesian_ids) ++
+    read_axes(axis_ids) ++
+      read_tcp(tcp_ids) ++
+      read_cartesian(cartesian_ids) ++
       read_state(state_ids, arg)
   end
 
@@ -309,6 +311,7 @@ defmodule ExProto.Source.Exdrive do
   @impl ExProto.Source
   def call("axes.jog_cartesian", args, arg), do: jog_cartesian(args, arg)
   def call("axes.move_linear", args, arg), do: move_linear(args, arg)
+  def call("axes.move_arc", args, arg), do: move_arc(args, arg)
 
   def call(node_id, args, arg) do
     case parse(node_id) do
@@ -504,15 +507,54 @@ defmodule ExProto.Source.Exdrive do
          {:ok, feedrate} <- feedrate(args) do
       chain = Registry.arm_chain()
 
-      case CartesianStream.move_linear(chain, target,
-             feedrate: feedrate,
-             max_tool_velocity: tool_speed_limit(arg)
-           ) do
-        :ok -> :ok
-        {:error, _reason} -> {:error, :rejected}
-      end
+      chain
+      |> CartesianStream.move_linear(target, motion_opts(args, feedrate, arg))
+      |> accepted()
     end
   end
+
+  defp move_arc(args, arg) do
+    with :ok <- Mode.allows_jog?(mode_server(arg)),
+         {:ok, target} <- target_frame(args),
+         {:ok, via} <- via_frame(args),
+         {:ok, feedrate} <- feedrate(args) do
+      chain = Registry.arm_chain()
+
+      chain
+      |> CartesianStream.move_arc(via, target, motion_opts(args, feedrate, arg))
+      |> accepted()
+    end
+  end
+
+  # The via point is a position and nothing else. An orientation there would be
+  # a promise about the middle of a move that this build does not keep — the
+  # tool is driven toward the *end* orientation, paced to arrive with the
+  # position, rather than slerped along the path.
+  defp via_frame(args) do
+    with {:ok, x} <- as_float(args["via_x"]),
+         {:ok, y} <- as_float(args["via_y"]),
+         {:ok, z} <- as_float(args["via_z"]) do
+      {:ok, %Frame{x: x, y: y, z: z}}
+    end
+  end
+
+  defp motion_opts(args, feedrate, arg) do
+    opts = [feedrate: feedrate, max_tool_velocity: tool_speed_limit(arg)]
+
+    case args["blend"] do
+      nil ->
+        opts
+
+      value ->
+        case as_float(value) do
+          {:ok, blend} -> Keyword.put(opts, :blend, blend)
+          {:error, _reason} -> opts
+        end
+    end
+  end
+
+  defp accepted(:ok), do: :ok
+  defp accepted({:error, _reason}), do: {:error, :rejected}
 
   # Rotation is optional, and omitting it means "keep the orientation you have"
   # rather than "go to zero". A client asking to move somewhere without saying
