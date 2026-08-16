@@ -39,7 +39,7 @@ defmodule ExMove.IK do
       target_pos = {target.x,  target.y,  target.z}
       target_rpy = {target.rx, target.ry, target.rz}
 
-      case NIF.solve(nif_joints, seed.positions, target_pos, target_rpy,
+      case NIF.solve(nif_joints, seed.positions, target_pos, target_rpy, to_nif_tool(chain.tool),
                      max_iter, tolerance, damping) do
         {:ok, positions, w, k}            -> {:ok,           JointState.from_positions(positions), w, k}
         {:near_singular, positions, w, k} -> {:near_singular, JointState.from_positions(positions), w, k}
@@ -102,7 +102,7 @@ defmodule ExMove.IK do
   """
   def jacobian(%Chain{} = chain, %JointState{positions: positions}) do
     nif_joints = Enum.map(chain.joints, &to_nif_joint/1)
-    flat = NIF.jacobian(nif_joints, positions)
+    flat = NIF.jacobian(nif_joints, positions, to_nif_tool(chain.tool))
     n = length(chain.joints)
     # flat is row-major 6×n — rows 0-2 linear, rows 3-5 angular
     linear  = for i <- 0..2, do: (for j <- 0..(n - 1), do: Enum.at(flat, i * n + j))
@@ -363,12 +363,21 @@ defmodule ExMove.IK do
   Maximum reach of the chain — sum of all link origin magnitudes.
   This is a conservative upper bound; actual reachable workspace is smaller.
   """
-  def max_reach(%Chain{joints: joints}) do
-    Enum.reduce(joints, 0.0, fn joint, acc ->
-      {ox, oy, oz} = joint.origin
-      acc + :math.sqrt(ox*ox + oy*oy + oz*oz)
-    end)
+  def max_reach(%Chain{joints: joints} = chain) do
+    links =
+      Enum.reduce(joints, 0.0, fn joint, acc ->
+        {ox, oy, oz} = joint.origin
+        acc + :math.sqrt(ox * ox + oy * oy + oz * oz)
+      end)
+
+    # Plus the tool, which is part of the reach whether or not anyone counted it.
+    # This bound is used to reject targets before iterating; a bound that stops
+    # short of the tool rejects points the arm can comfortably touch.
+    links + tool_reach(chain.tool)
   end
+
+  defp tool_reach(nil), do: 0.0
+  defp tool_reach(%Frame{x: x, y: y, z: z}), do: :math.sqrt(x * x + y * y + z * z)
 
   # --- Private --------------------------------------------------------------
 
@@ -404,6 +413,13 @@ defmodule ExMove.IK do
       end)
       JointState.from_positions(positions)
     end)
+  end
+
+  # The Frame the Chain carries, flattened for the NIF boundary.
+  defp to_nif_tool(nil), do: {0.0, 0.0, 0.0, 0.0, 0.0, 0.0}
+
+  defp to_nif_tool(%Frame{x: x, y: y, z: z, rx: rx, ry: ry, rz: rz}) do
+    {x, y, z, rx, ry, rz}
   end
 
   defp to_nif_joint(%ExMove.Joint{

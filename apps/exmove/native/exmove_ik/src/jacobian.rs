@@ -28,12 +28,24 @@ use crate::math;
 /// of `ExMove.FK.solve/2`. That is the only check that catches this class of
 /// error; comparing `J·dq` to the commanded twist compares `J` with itself.
 ///
-/// Note that `p_tcp` here is the tip of the last joint, not the tool centre
-/// point: the tool offset lives on the Elixir `Chain` and is not passed in.
-/// While the offset is identity the two coincide. A chain with a real tool needs
-/// the offset plumbed through here, and `ExMove.IK.solve/4` targets the same
-/// point, so the two stay consistent with each other in the meantime.
-pub fn compute(joints: &[NifJoint], thetas: &[f64]) -> Vec<f64> {
+/// # The tool
+///
+/// `tool` is the TCP offset from the last joint, as `(x, y, z, roll, pitch,
+/// yaw)`. It moves `p_tcp` and therefore every linear column; the angular
+/// columns are untouched, because a rigid attachment turns at exactly the rate
+/// of the thing it is attached to.
+///
+/// Getting this wrong is invisible under translation. A tool is rigid, so for a
+/// command with no angular part `v_tool` and `v_wrist` are equal and a Jacobian
+/// written about the wrong point still produces the right motion. Under rotation
+/// they differ by `ω × r`, and solving about the wrist for "turn about this axis
+/// and do not translate" holds the wrist still and swings the tool through an
+/// arc — the tool orbiting the point it was meant to pivot about.
+pub fn tool_transform((x, y, z, roll, pitch, yaw): (f64, f64, f64, f64, f64, f64)) -> math::Mat4 {
+    math::mul(&math::translation(x, y, z), &math::rotation_rpy(roll, pitch, yaw))
+}
+
+pub fn compute(joints: &[NifJoint], thetas: &[f64], tool: (f64, f64, f64, f64, f64, f64)) -> Vec<f64> {
     let n = joints.len();
 
     // Cumulative transforms. frames[i] is the base-frame pose of the chain
@@ -57,8 +69,8 @@ pub fn compute(joints: &[NifJoint], thetas: &[f64]) -> Vec<f64> {
         return jac;
     }
 
-    // Tip position in the base frame.
-    let (px, py, pz) = math::translation_of(frames.last().unwrap());
+    // Tool centre point in the base frame.
+    let (px, py, pz) = math::translation_of(&math::mul(frames.last().unwrap(), &tool_transform(tool)));
 
     for i in 0..n {
         let frame_i = &frames[i];

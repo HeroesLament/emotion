@@ -106,6 +106,74 @@ defmodule ExMove.JacobianTest do
     end
   end
 
+  describe "with a tool fitted" do
+    # The Jacobian NIF is handed the joints. The tool offset lives on the Elixir
+    # `Chain`, and until it was plumbed through, every Cartesian command solved
+    # for the tip of the last joint instead of for the tool centre point.
+    #
+    # It hid because `Library.demo()` has an identity tool, where the two points
+    # coincide. Fit a real one — a spindle offset and tilted, which is what a
+    # tool usually is — and the lever arm for every joint changes.
+    @tool %ExMove.Frame{x: 0.05, y: 0.12, z: -0.03, rx: 0.3, ry: -0.2, rz: 0.15}
+
+    test "the linear rows still match a finite difference of FK", %{chain: chain} do
+      chain = %{chain | tool: @tool}
+      q = [0.3, 0.5, -0.9, 0.4, 0.6, -0.2]
+
+      for {row, i} <- Enum.with_index(linear_rows(chain, q)),
+          {{a, b}, j} <- Enum.with_index(Enum.zip(row, Enum.at(finite_difference(chain, q), i))) do
+        assert_in_delta a, b, @tolerance, "row #{i}, column j#{j + 1}"
+      end
+    end
+
+    test "a tool that is a pure rotation still moves the pivot arithmetic", %{chain: chain} do
+      # A tool with no offset but an orientation changes nothing about where the
+      # TCP is, so this is the case that must NOT change the linear rows. Stated
+      # because the fix is a transform composition, and composing it in the wrong
+      # order would rotate the offset that is not there into one that is.
+      rotated = %{chain | tool: %ExMove.Frame{rx: 0.4, ry: 0.2, rz: -0.5}}
+      q = [0.3, 0.5, -0.9, 0.4, 0.6, -0.2]
+
+      for {a, b} <- Enum.zip(List.flatten(linear_rows(chain, q)), List.flatten(linear_rows(rotated, q))) do
+        assert_in_delta a, b, 1.0e-12
+      end
+    end
+
+    test "rotating with a tool fitted turns the tool, not the wrist", %{chain: chain} do
+      # This is the case where the reference point is observable, and the reason
+      # the pure-translation cases above are not enough on their own.
+      #
+      # A tool is rigidly attached, so for a command with no angular component
+      # the tool travels at exactly the wrist's velocity — the offset cancels and
+      # a Jacobian written about the wrong point still produces the right motion.
+      # Add rotation and it stops cancelling: `v_tool = v_wrist + ω × r`. Solving
+      # about the wrist for "rotate about base X and do not translate" gives an
+      # answer that holds the *wrist* still and swings the tool through an arc of
+      # radius |r|, which is the classic wrong-place bug and looks, on a machine,
+      # like the tool orbiting the point it was supposed to pivot about.
+      chain = %{chain | tool: @tool}
+      q = [0.3, 0.5, -0.9, 0.4, 0.6, -0.2]
+      commanded = [0.0, 0.0, 0.0, 0.2, 0.0, 0.0]
+
+      {:ok, %JointState{velocities: dq}, _report} =
+        IK.solve_velocity(chain, JointState.from_positions(q), commanded)
+
+      before = FK.solve(chain, JointState.from_positions(q))
+
+      after_ =
+        FK.solve(
+          chain,
+          JointState.from_positions(Enum.zip(q, dq) |> Enum.map(fn {a, b} -> a + b * @h end))
+        )
+
+      actual = [(after_.x - before.x) / @h, (after_.y - before.y) / @h, (after_.z - before.z) / @h]
+
+      for {a, c} <- Enum.zip(actual, Enum.take(commanded, 3)) do
+        assert_in_delta a, c, 1.0e-5
+      end
+    end
+  end
+
   describe "angular rows" do
     # Not finite-differenced: FK reports orientation as rpy, and differencing rpy
     # gives Euler rates rather than the angular velocity the Jacobian's bottom

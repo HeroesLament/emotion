@@ -21,6 +21,7 @@ pub fn solve(
     seed: &[f64],
     target_pos: (f64, f64, f64),
     target_rpy: (f64, f64, f64),
+    tool: (f64, f64, f64, f64, f64, f64),
     max_iterations: u32,
     tolerance: f64,
     damping: f64,
@@ -43,7 +44,7 @@ pub fn solve(
     let mut best_err    = f64::MAX;
 
     for _iter in 0..max_iterations {
-        let tcp = fk_tcp(joints, &q);
+        let tcp = fk_tcp(joints, &q, tool);
         let (cx, cy, cz) = math::translation_of(&tcp);
 
         let ep = [tx - cx, ty - cy, tz - cz];
@@ -53,7 +54,7 @@ pub fn solve(
 
         if err_norm < best_err { best_err = err_norm; best_q = q.clone(); }
 
-        let jac = jacobian::compute(joints, &q);
+        let jac = jacobian::compute(joints, &q, tool);
         let w   = manipulability(&jac, n);
         last_w  = w;
 
@@ -120,7 +121,7 @@ pub fn solve(
     }
 
     if constrained {
-        let jac_best = jacobian::compute(joints, &best_q);
+        let jac_best = jacobian::compute(joints, &best_q, tool);
         let kappa = condition_number_from_jac(&jac_best, n);
         return IkResult::Constrained(normalize_angles(best_q), last_w, kappa);
     }
@@ -334,7 +335,11 @@ fn normalize_angles(q: Vec<f64>) -> Vec<f64> {
     }).collect()
 }
 
-fn fk_tcp(joints: &[NifJoint], q: &[f64]) -> math::Mat4 {
+// The target is a tool centre point, not a wrist pose. Same reference point as
+// the Jacobian above and as `ExMove.FK.solve/2`, which is the property that
+// matters: three descriptions of where the arm is that disagree are worse than
+// any one of them being wrong, because each looks right from its own side.
+fn fk_tcp(joints: &[NifJoint], q: &[f64], tool: (f64, f64, f64, f64, f64, f64)) -> math::Mat4 {
     let mut acc = math::identity();
     for (joint, &theta) in joints.iter().zip(q.iter()) {
         let t = math::joint_transform(
@@ -345,7 +350,7 @@ fn fk_tcp(joints: &[NifJoint], q: &[f64]) -> math::Mat4 {
         );
         acc = math::mul(&acc, &t);
     }
-    acc
+    math::mul(&acc, &jacobian::tool_transform(tool))
 }
 
 fn orientation_error(r_desired: &math::Mat4, r_current: &math::Mat4) -> [f64; 3] {

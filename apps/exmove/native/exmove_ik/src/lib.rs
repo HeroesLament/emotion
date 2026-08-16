@@ -12,8 +12,12 @@ rustler::init!("Elixir.ExMove.IK.NIF");
 /// Returns flat row-major Vec<f64> — 6 rows × n cols.
 /// Rows 0-2: linear velocity, rows 3-5: angular velocity.
 #[rustler::nif(schedule = "DirtyCpu")]
-fn jacobian(joints: Vec<NifJoint>, thetas: Vec<f64>) -> Vec<f64> {
-    jacobian::compute(&joints, &thetas)
+fn jacobian(
+    joints: Vec<NifJoint>,
+    thetas: Vec<f64>,
+    tool: (f64, f64, f64, f64, f64, f64),
+) -> Vec<f64> {
+    jacobian::compute(&joints, &thetas, tool)
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -22,6 +26,7 @@ fn solve(
     seed: Vec<f64>,
     target_pos: (f64, f64, f64),
     target_rpy: (f64, f64, f64),
+    tool: (f64, f64, f64, f64, f64, f64),
     max_iterations: u32,
     tolerance: f64,
     damping: f64,
@@ -31,7 +36,7 @@ fn solve(
     }
     solver::solve(
         &joints, &seed,
-        target_pos, target_rpy,
+        target_pos, target_rpy, tool,
         max_iterations, tolerance, damping,
     )
 }
