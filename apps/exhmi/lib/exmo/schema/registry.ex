@@ -189,20 +189,25 @@ defmodule ExMo.Schema.Registry do
       id: "axes.jog_cartesian",
       name: "JogCartesian",
       description:
-        "Move the tool centre point along or about one base axis, for as long " <>
-          "as the client keeps saying so. Held exactly like a joint jog: " <>
-          "re-send at around 10 Hz, and the controller commands zero as soon " <>
-          "as assertions stop arriving. An assertion refreshes the direction " <>
-          "and speed; the controller re-solves from the arm's live joint " <>
-          "positions on its own clock, so the path does not depend on how " <>
-          "often the client can speak. Solved differentially from where the " <>
-          "arm is, so it stays on the configuration it is already in rather " <>
-          "than flipping elbow or wrist mid-move. Near a singularity the " <>
-          "joint rates are damped rather than refused, and the whole vector " <>
-          "is scaled to a rate ceiling rather than clamped per joint — so a " <>
-          "jog into one is slow and off the commanded line rather than " <>
-          "violent, and is not currently reported as either. Use joint jog " <>
-          "to leave a singularity.",
+        "Move the tool centre point along or about one axis of the chosen " <>
+          "frame, for as long as the client keeps saying so. Held exactly " <>
+          "like a joint jog: re-send at around 10 Hz, and the controller " <>
+          "commands zero as soon as assertions stop arriving. An assertion " <>
+          "refreshes the direction and speed; the controller re-solves from " <>
+          "the arm's live joint positions on its own clock, so the path does " <>
+          "not depend on how often the client can speak, and the frame is " <>
+          "re-resolved with it, so a rotation about a tool axis follows the " <>
+          "tool rather than tracing a cone. Solved differentially from where " <>
+          "the arm is, so it stays on the configuration it is already in " <>
+          "rather than flipping elbow or wrist mid-move. When a joint would " <>
+          "have to turn faster than it can, or would run out of travel, the " <>
+          "whole joint vector is scaled rather than clamped per joint — the " <>
+          "tool stays exactly on the commanded line and the motion slows. " <>
+          "Watch `axes.cartesian` for what the controller is making of it: " <>
+          "the state, the fraction of commanded speed being delivered, the " <>
+          "reason, and the joint responsible when there is one. Approaching a " <>
+          "singularity that fraction falls to zero and the jog is refused; " <>
+          "use a joint jog, which is the only way out of one.",
       async: true,
       call_grant: :jog,
       meta: %{watchdog: true},
