@@ -13,7 +13,7 @@ contract inside one of them would quietly make that one authoritative.
 | `emotion-protocol.openrpc.json`  | The interface contract (OpenRPC 1.3.2) — **generated** |
 | `DESIGN.md`                      | Drive layer, CiA 402, FOC, and the force path |
 | `CARTESIAN.md`                   | Cartesian motion: the stream, limits, frames, moves |
-| `PROGRAMS.md`                    | Programs, taught points and user frames      |
+| `PROGRAMS.md`                    | Programs, taught points, user frames, and where code lives |
 
 ## The stack
 

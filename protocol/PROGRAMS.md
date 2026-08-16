@@ -1,6 +1,7 @@
 # Programs, points and frames
 
-What a stored program is, what a taught point is, and why frames come first.
+What a stored program is, what a taught point is, why frames come first, and
+where code is allowed to live.
 
 Written before any of it exists, because the last document in this directory was
 written the same way and its first two sections turned out to be wrong in ways a
@@ -9,25 +10,30 @@ evidence is available — four vendors who have each shipped this for thirty yea
 — and marks the rest as guesses to be checked rather than decisions to be
 defended.
 
-## The one idea
+## Two ideas
 
 **Everything that makes a taught path adapt at runtime is a frame.**
 
 Vision finding a part, a conveyor carrying one past, a fixture that was bumped
 and re-taught, a force search that locates a surface — all four are the same
 operation. Compute a frame, apply it to a path that was taught once and never
-edited again.
+edited again. That is why frames come first, and why they are not a convenience
+for teaching. They are the extension point everything interesting hangs off.
 
-That is why frames come first, and why they are not a convenience for teaching.
-They are the extension point that everything interesting hangs off. A controller
-without them can be told where to go; a controller with them can be told where to
-go *relative to something that moved*.
+**A program is data. Code extends the vocabulary that data is written in.**
+
+Not "programs are written in a language". A program is a sequence of validated
+records, every one of which the controller can check before it runs and refuse
+before it moves. Code — real Elixir, compiled and deployed — adds new kinds of
+record. It never becomes the body of one.
+
+Those two ideas carry the whole document. Everything below is consequence.
 
 ## What the incumbents actually do
 
-Not a survey. Four patterns that every one of FANUC, ABB, KUKA and Yaskawa
-arrived at independently, which is the strongest available evidence that they are
-properties of the problem rather than of a vendor.
+Not a survey. Patterns that FANUC, ABB, KUKA and Yaskawa arrived at
+independently, which is the strongest available evidence that they are properties
+of the problem rather than of a vendor.
 
 **A program is statements over named points.**
 
@@ -59,7 +65,14 @@ any INFORM jobs". KUKA has the SPS submit interpreter, FANUC has Background
 Logic, ABB has semi-static tasks. A motion program is never the only thing
 executing, on any of them.
 
-And one that only ABB makes explicit, which is the most useful of the lot:
+**The graphical vocabulary is extended by code, not replaced by it.** ABB's
+Wizard is drag-and-drop blocks with a standard palette, and *"for situations
+where highly specialized blocks are required, experts can easily create custom
+blocks with the Skill Creator"*. A URCap contributes **program nodes** that
+appear in the tree beside the built-in ones. Two vendors, two decades apart,
+same answer: the escape hatch produces new vocabulary.
+
+And one that only ABB makes explicit, which is the most immediately useful:
 
 **The joint configuration is stored with the point.** ABB's `robtarget` carries
 `confdata`. Without `ConfJ`/`ConfL` enforcement the wrist can flip 180° at the
@@ -107,10 +120,11 @@ would make opening a file a way to change a machine.
 
     Studio                          Controller
     ─────────                       ──────────
-    offline cells                   frames        ← authoritative
-    projects, layouts               points        ← authoritative
-    a cached copy of ────push/pull──programs      ← authoritative
-      frames/points/programs        execution
+    block editor (primary)          frames        ← authoritative
+    teaching (secondary)            points        ← authoritative
+    text export (third)             programs      ← authoritative
+    extension SDK ───deploy──────►  extensions    ← authoritative
+    a cached copy ───push/pull───►  execution
     simulation, preview             the queue
 
 Studio's own storage is SQLite and is nobody else's business. Note that
@@ -163,9 +177,21 @@ replay seeds from the taught solution and stays on that branch, while offline
 Points are named. Whether they are program-local, global, or both is an open
 question below — every vendor ended up with both, which is a hint.
 
-## 3. Programs
+## 3. Programs: three layers
 
-A named, stored sequence of statements. Starting set, deliberately small:
+The authoring order is decided: **Studio blocks first, teaching second, text
+third.** Everything in this section follows from that, and from the second of
+the two ideas at the top.
+
+### Layer 1 — blocks, which are the program
+
+A program is a sequence of **statements**, and a statement is a record: a kind,
+and typed arguments. Drag-and-drop editing is the primary way they are authored,
+which settles a question this document previously left open — you cannot
+drag-and-drop text, so the structure is authoritative and any text form is a
+rendering of it. See §6.
+
+The starting kinds, deliberately few:
 
     move_joint    point, speed, termination
     move_linear   point, feedrate, termination
@@ -174,17 +200,80 @@ A named, stored sequence of statements. Starting set, deliberately small:
     set           an output
     call          another program
 
-Each motion statement carries its own feedrate and termination, which maps onto
+Every motion statement carries its own feedrate and termination, which maps onto
 the queue that exists today without changing it. FINE and blended termination are
 already built and already tested; a program is a thing that fills the queue.
 
+**Arguments are typed, and the types are the point.** A point socket accepts only
+a point; a frame socket only a frame; a duration only a duration. That one
+decision buys three things at once: the block editor knows what may be dropped
+where, the database can hold foreign keys and refuse to delete a frame a program
+uses, and a statement can be validated when it is stored rather than when the arm
+is already moving.
+
 Branching — labels, jumps, conditionals — comes after. It is the difference
 between a sequence and a language, and the sequence is worth having on its own.
+Note that until branching lands a program is a **list**, not a tree, which makes
+the first increment considerably smaller than "structured editor" suggests.
 
-**Execution is a process.** It fills the queue, watches for completion, and stops
-on a fault. The queue enforces the rate ceiling, the joint limits, the tool speed
-cap and the singularity policy exactly as it does for a jog, because those are
-properties of the machine and not of who asked.
+### Layer 2 — expressions, which are small and cannot bite
+
+Some arguments want a little logic: `count < 10`, `part_present and not fault`.
+That is real and it should be supported, and it should not be Elixir.
+
+A small pure expression language — comparisons, arithmetic, boolean operators,
+references to signals and variables — evaluated with no side effects, no process
+spawning, no filesystem, and no way to reach a drive. Spreadsheet-formula-shaped.
+It covers most of what people reach for code for, and it cannot take the machine
+down, which is the entire reason it is a separate layer rather than "just let
+them write Elixir here".
+
+### Layer 3 — extensions, which are real Elixir and contribute blocks
+
+Compiled Elixir modules that register **new statement kinds**. `ExMo.Behavior` is
+already this, one rename away: a definition with a name, typed inputs, observable
+runtime fields and named fault classes is exactly a block's signature.
+
+A `PickWithVision` block, a `TorqueSeek` block, the K1C unload — each is an
+extension publishing a typed signature, and each appears in the palette beside
+`MoveL`. This is what ABB's Skill Creator and Universal Robots' URCaps both do,
+and it is why the two authoring stories in this project are not in competition:
+**blocks are the vocabulary, and Elixir is how you add words to it.**
+
+Extensions are deployed, not edited. They are compiled, versioned, and installed
+the way firmware is — not hot-edited on a machine that is running. The grant for
+doing so is an open question below; it is closer to `warm_restart` than to
+`edit_program`.
+
+### Why a program body must never be Elixir
+
+Stated plainly because the pull toward it is strong and the cost is not obvious.
+
+Arbitrary Elixir running on the controller can call
+`Exdrive.Drive.set_target_velocity/2` directly. One line. That bypasses the joint
+rate ceiling, the joint-limit stop, the tool speed cap, the singularity refusal,
+the mode interlock and the hold watchdog — every guard in `CARTESIAN.md`, all of
+which exist because motion arrives through the queue and nowhere else.
+
+There is no sandbox on the BEAM. A program body would have `File`,
+`:erlang.halt/0`, process spawning, ETS, and a scheduler shared with a 200 Hz
+Cartesian stream. And the argument is not about malice: it is that a *bug* in a
+program becomes a runtime fault rather than a refused command, which is the exact
+inversion of what a controller is for.
+
+The three layers exist so that the answer to "I need to do something the blocks
+cannot express" is *add a block*, and the code that adds it is reviewed,
+compiled, and deployed rather than typed into a running machine.
+
+### The statement-kind registry
+
+The consequence of layer 3 that has to exist on day one: statement kinds are
+**registered**, with a name, typed parameters, and whatever a block editor needs
+to render them. Built-in kinds register through the same door extensions use.
+
+Building the registry later, once six kinds are hard-coded across a projection, a
+source, an executor and an editor, is the expensive version of this. Building it
+first, when every entry in it is built in, costs almost nothing.
 
 ### Mode gets its second job
 
@@ -199,16 +288,16 @@ Which is how all four vendors work, and it is why the mode enum already reads
 `execute_program`, `load_program` and `edit_program` have been in
 `ExAuth.Grant` since it was written, unused.
 
-### Program source is not on the RPC link
+### Program bodies are not on the RPC link
 
 `README.md` in this directory already decided this: *"Bulk transfer — program
 source, logs, motion traces — is not on this link. It is plain HTTP on the same
 host so it stays curl-able and does not compete with live telemetry."*
 
 So the model carries what a pendant renders — a program's name, its state, the
-line it is on, its fault — and the source itself is uploaded and downloaded over
-HTTP. A program that is thousands of lines does not belong in a JSON-RPC frame
-competing with a 30 Hz position stream.
+statement it is on, its fault — and the body itself is uploaded and downloaded
+over HTTP as a canonical serialisation. A program of a thousand statements does
+not belong in a JSON-RPC frame competing with a 30 Hz position stream.
 
 ## 4. The parallel logic context
 
@@ -223,41 +312,95 @@ What matters now is only that the program model does not assume it is the sole
 executing context: nothing may claim the arm implicitly, and holds stay the way
 motion is claimed.
 
-## 5. Where G-code and behaviours fit
+## 5. G-code is an importer
 
-**`ExGCode` is an importer, not the program model.** G-code is the CAM lineage:
-it streams coordinates, with no named points, no frames, no per-line termination
-and no logic. Every vendor supports it as an import path and none uses it as the
-native model. The parser exists and is 299 lines with no tests; what it needs is
-to produce a *program* rather than a stream of `%Frame{}`, because a stream of
-frames goes around the queue and therefore around every limit and every report
-that `CARTESIAN.md` spent its length establishing.
+G-code is the CAM lineage: it streams coordinates, with no named points, no
+frames, no per-line termination and no logic. Every vendor supports it as an
+import path and none uses it as the native model.
 
-**`ExMo.Behavior` is the extension mechanism**, and Universal Robots names the
-pattern most clearly. A URCap contributes **installation nodes** — system-level,
-one instance, configuration — and **program nodes**, which appear as statements
-inside a program. We have arrived at the same split without naming it:
-`RemovePreviousPrint` is a program node, and user frames are installation.
+`ExGCode` exists, is 299 lines, and has no tests. What it needs is to produce a
+*program* — statements over generated points — rather than a stream of
+`%Frame{}`, because a stream of frames goes around the queue and therefore around
+every limit and every report that `CARTESIAN.md` spent its length establishing.
 
-Naming it suggests the shape: a behaviour becomes a statement a program can
-contain, and the K1C unload stops being a special top-level thing and becomes a
-line in a program that also moves the arm.
+Behaviours are not in this section any more. They are layer 3 of §3.
 
-## 6. Storage
+## 6. Storage, and the text question resolved
 
-**One controller database.** Frames, points and programs join accounts and tokens
-in the existing repo. One file to back up — and `backup` is already a declared
-grant — one migration path, one thing to get right on a Nerves image.
+**One controller database.** Frames, points, programs and registered extensions
+join accounts and tokens in the existing repo. One file to back up — and `backup`
+is already a declared grant — one migration path, one thing to get right on a
+Nerves image. `ExAuth.Repo` then outgrows its name and should be renamed the
+moment the first non-credential table lands, not two months later at a hundred
+call sites.
 
-`ExAuth.Repo` then outgrows its name, since it stops being the credential store
-and becomes the controller store. Renaming it is a mechanical change that should
-happen at the moment the first non-credential table lands, not two months later
-when it is a hundred call sites.
+Statements are **rows**, not a blob: `(program_id, seq, kind, args)` with foreign
+keys to points and frames. Typed sockets make those keys real, which is what
+allows the database itself to refuse to delete a frame a program still uses.
 
-Studio's SQLite is separate and unrelated. Two databases, on two machines, with
-an explicit copy between them.
+### Why structure is authoritative and text is a rendering
 
-## 7. How we would know it is finished
+Blocks force it — you cannot drag-and-drop text. But the vendors' experience says
+the same thing from a different direction, and it is worth recording because both
+of the obvious answers have shipped and both are lossy **in the same place**.
+
+KUKA's inline forms generate KRL, and the parameters needed to *reopen the form*
+are stored as comment metadata after a `;FOLD` marker. The compiler ignores them;
+the pendant reads them. Remove the comment and the program still runs but can no
+longer be edited on the pendant. That is a structured record smuggled into a
+comment because the text alone cannot round-trip the editor.
+
+Universal Robots goes the other way: `.urp` is the editable format, and the
+`.script` text export *has no waypoints* — the taught positions cannot be edited
+from it.
+
+Both lose the same thing: the taught data and the editor's own metadata. Both
+tried to make one artifact carry logic and data, and that seam is where the loss
+lands. KUKA's own `.src`/`.dat` split is the fix, applied inconsistently.
+
+Keeping points, frames and statement arguments in their own tables means the
+"body" is only the sequence, which is small and renders losslessly. And the
+directions are not symmetric: rendering structure to text is **total** and always
+succeeds, while parsing text to structure is **partial** and can fail. So:
+
+  * **Write the printer now.** It is cheap, it cannot fail, and it buys `git
+    diff` over a cell's programs, curl-able export, and reviewable change.
+  * **Defer the parser** until somebody actually wants to author in a text
+    editor. That is the expensive, breakable half and it blocks nothing.
+
+Migration runs the same way round. Structure to text later is a printer over the
+whole corpus and cannot fail; text to structure later is a parser over programs
+people have hand-edited for years, some of which will not parse.
+
+## 7. Studio
+
+**Blocks are day one and primary.** A block editor is a tree editor, which is
+what a widget toolkit is good at, and Cedar exists.
+
+**Teaching is second.** Drive the arm, record a point: pose, active frame, and
+the joint vector. Cobot-style hand guiding is the same operation with a different
+input device.
+
+**Text is third and is an export**, per §6.
+
+**The Elixir SDK is a build-and-deploy loop, not a text editor.** Studio
+scaffolds an extension project, builds it, deploys it to a controller, runs it
+against the simulator and shows the result. You edit in your own editor.
+
+This is a deliberate scoping decision rather than a limitation, and it is worth
+the paragraph. A text editor widget with completion, diagnostics, hover and
+selection is plausibly more UI work than the entire block editor, and it competes
+with editors that are free and better at it. Expert — the official Elixir
+language server, which absorbed ElixirLS, Lexical and Next LS — is also still
+working toward its first release, so embedding it now means tracking a moving
+target. URCap development works exactly this way: the IDE is yours, the loop is
+the vendor's.
+
+If an in-app editor is wanted later, it is for **extensions only, never for
+programs**, and it comes after blocks. It is an IDE feature that happens to live
+in a robot tool and should be scheduled as one.
+
+## 8. How we would know it is finished
 
 The tests are the specification, and the first one is the one that makes frames
 worth having:
@@ -280,33 +423,46 @@ worth having:
   * **A blended two-line program does not stop at the corner.** Already true at
     the queue level; the test here is that a *program* preserves it, rather than
     inserting a stop between statements by accident.
+  * **A statement with the wrong argument type is refused when stored**, not when
+    reached. Typed sockets are only worth having if the refusal is early.
+  * **An extension's block is indistinguishable from a built-in one** — same
+    registration, same validation, same execution path, same reporting. If the
+    built-ins get a shortcut, extensions are second-class and the vocabulary
+    stops being extensible in practice.
 
 ## Order
 
 1. **User frames.** Smallest, and everything else references them. Vision is the
    reason to do them first rather than last.
 2. **Points**, with the frame reference and the taught joint solution.
-3. **Program storage** — name, statements, HTTP upload, model nodes for state.
-4. **Program execution** — the process that fills the queue, and the mode
+3. **The statement-kind registry**, with the built-in kinds registered through
+   it. Cheap now, expensive later.
+4. **Program storage** — statements as rows, HTTP body transfer, model nodes for
+   state. The printer lands here.
+5. **Program execution** — the process that fills the queue, and the mode
    interlock in its second direction.
-5. **Behaviours as statements**; G-code as an importer.
-6. Branching, dynamic frames, frame hierarchy, the parallel logic context.
+6. **Blocks in Studio**, against the registry.
+7. **Extensions**: behaviours re-homed as registered statement kinds, and the
+   deploy loop.
+8. Expressions, branching, G-code import, dynamic frames, frame hierarchy, the
+   parallel logic context.
 
 ## Open questions
 
-- **Text or tree.** KUKA and ABB store program *text* and parse it; Universal
-  Robots stores a *tree* and renders it. A pendant edits through forms either
-  way, so the question is what is authoritative on disk. Text diffs, reviews and
-  greps; a tree cannot be syntactically invalid. This changes the storage schema
-  and should be settled before the schema is written.
 - **Points global or program-local.** Everyone ended up with both — FANUC's `P[]`
   against `PR[]`, Yaskawa's local against global position variables. Starting
   with program-local only is the smaller thing, and the migration to both is a
   nullable column.
+- **What grant deploys an extension.** It installs code that runs in the
+  controller's VM, which is closer to firmware than to `edit_program`. Probably
+  its own grant, granted alone, in the way `configure_safety` already is.
+- **How far the expression language goes** before it becomes a language nobody
+  meant to design. Comparisons and arithmetic are clearly in; function calls and
+  user-defined variables are the edge.
 - **What a taught point stores when the arm is at a singularity.** The joint
   vector is fine; the pose is the thing that stops being invertible. Probably
   nothing to do, but it should be tried before it is assumed.
-- **Whether behaviours and programs unify** or stay two mechanisms that meet at a
-  statement boundary. Unifying is elegant and might be wrong: a behaviour is a
-  supervised FSM with fault classes, and a program is a sequence. Elegance has
-  already cost this project a damping ladder.
+- **Whether an extension can be written in the expression language** rather than
+  Elixir, for the common case of a block that is just a parameterised sequence of
+  other blocks. That would be a macro rather than an extension, and it might be
+  the most useful thing in this document. It is also the easiest to get wrong.
