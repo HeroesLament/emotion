@@ -97,34 +97,83 @@ The stream stops on an explicit zero, on the hold lapsing, or on its own death.
 The watchdog is unchanged: it still guards the hold, it just stops doubling as
 the interpolator.
 
-## 2. Singularity policy — three tiers, not one check
+## 2. Singularity policy — measured, and not what this section first said
 
-Today `solve_velocity/3` reports `:singular` only when its Gaussian elimination
-fails outright, and its damping constant is fixed at 1.0e-6. That is enough to
-avoid dividing by zero and nowhere near a guard: near a singularity it returns
-large joint rates that are arithmetically fine and physically wrong, and the
-caller applies them. The model description currently claims a refusal that does
-not happen — fix the claim or the code, but not neither.
+The plan here was three tiers: detect on manipulability, damp with a variable λ,
+refuse below a κ floor. Two of the three did not survive contact with the arm.
+Done in `3b59796`; what follows is what is actually there and why.
 
-**Finished** is three tiers, evaluated every stream tick:
+**Manipulability cannot tell you whether a command is hard.** Measured on the
+demo chain, commanding 0.05 m/s in +Z:
 
-  * **Detect.** Manipulability `w = sqrt(det(J·Jᵀ))`, or the condition number.
-    Cheap enough at 200 Hz and it is the number everything else keys off.
-  * **Damp.** Variable λ, zero when `w` is comfortable and rising smoothly as it
-    falls (Nakamura, or Chiaverini's variable-damping form). This trades path
-    accuracy for bounded joint rates *near* a singularity instead of failing
-    *at* one.
-  * **Refuse.** Below a floor, stop and say so. The operator is told the arm is
-    singular and to use joint jog, which is the only way out of one anyway.
+    approaching full extension        approaching the wrist singularity
+    j3       w          peak dq       j5      w          peak dq
+    -0.4     0.0159     0.22          0.3     0.0012     0.0721
+    -0.1     0.0057     1.19          0.05    0.0002     0.0721
+    -0.02    0.0012     6.33          0.01    0.00004    0.0721
+    -0.001   0.00006  128.49          0.0     0.0        0.0721
 
-Alongside, always on: the joint-rate ceiling, applied by scaling the whole
-vector rather than clamping per joint — clamping changes the ratios between
-joints, and the ratios *are* the direction, so a clipped arm travels
-confidently somewhere nobody pointed.
+`w` collapses identically in both. In the first the arm is in real trouble; in
+the second nothing happens at all, because the freedom being lost is a wrist
+rotation and a translation never needed it. A κ floor would have stopped a
+perfectly good jog for a reason invisible from the pendant — the exact failure
+the reporting part of this section exists to prevent.
 
-And it has to be *reported*. A pendant that says "limited: near singularity" is
-a machine explaining itself; one that silently slows down is a machine that
-feels broken.
+`w` is a property of the pose. Whether a command is achievable is a property of
+the pose *and the direction asked for*.
+
+**So the refusal is on the residual**, `|J·dq − v| / |v|` — the fraction of the
+commanded twist the joints fail to deliver. At the wrist singularity it is
+3.6e-12 for a translation and 0.098 for a rotation, at the same pose, which is
+the distinction `w` cannot draw. Costs about 36 multiplies a tick.
+
+**Variable damping loses to the scaling that was already here.** Damping bounds
+joint rates by bending the answer away from the command, and the bend is not
+small: at `j3 = -0.1` — 1.19 rad/s, no crisis — damping to a 0.5 rad/s ceiling
+costs *half* the commanded twist. Uniform scaling meets the same ceiling with the
+residual at zero: the tool exactly on the commanded line at 0.42× speed.
+
+That is the argument already made against clamping per joint. The ratios between
+joints are the direction; damping breaks them for the same reason clamping does,
+just more politely. Speed is the cheaper thing to lose and the one an operator
+can see going.
+
+So λ is 1e-6 and no longer tunable — the smallest number that keeps a
+rank-deficient 6×6 elimination from dividing by zero, and nothing else. It starts
+to show at `j3 = -0.001`, where the residual reaches 1.8e-5, which is exactly
+where it should start to show.
+
+Losing the ability to damp *through* a singularity costs nothing: a jog should
+not transit one, and joint jog is the way out, which the model description
+already tells operators.
+
+**What is there now**, per tick:
+
+  * Scale the whole vector to the joint rate ceiling. Direction exact.
+  * Refuse if the residual exceeds a quarter — the arm cannot go where it was
+    pointed. Rare on this chain: five joints supply nine tenths of any
+    single-axis rotation between them, so this is for commands with no
+    achievable component at all rather than a guard that fires daily.
+  * Refuse if the achievable tool speed falls under a fiftieth of what was asked.
+    Approaching a boundary singularity that happens smoothly, which is
+    physically correct and, on a pendant, indistinguishable from a hang.
+  * A refusal writes zero rather than writing nothing, and does not latch. Being
+    in an awkward pose is not a fault and should not need clearing.
+
+**And it is reported**, which was always the half that mattered. Three nodes
+under `axes.cartesian`, read-only and observable:
+
+  * `state` — idle | tracking | limited | refused.
+  * `speed_fraction` — the fraction of commanded tool speed being delivered.
+  * `manipulability` — published for a viewport to shade reachability with, and
+    deliberately not what the controller decides on.
+
+Verified live: `idle → tracking → limited 0.571` while jogging +Z toward full
+extension.
+
+Still open: the ceiling is one number for every joint, read from a constant
+rather than from the model. A machine with a linear axis needs it per axis, and
+the axis model is where it belongs.
 
 ## 3. Frames
 
@@ -227,8 +276,10 @@ caught what we shipped:
     commanded line stays under a millimetre — at the manual speed limit, not at
     jog speed, which is where the margin actually is.
   * **Speed.** `|Δp|/Δt` within a few percent of what was asked for.
-  * **Singularity.** Approach one; assert damping engages, then refusal, and
-    that no joint rate ever exceeds the ceiling on the way.
+  * **Singularity.** Done — `exmove_singularity_test.exs`. Approach both kinds;
+    assert the rates diverge at one and not the other, that the residual sees
+    the difference and manipulability does not, and that the stream reports
+    limited before it reports refused.
   * **Limits.** Jog into a joint limit; assert the arm stops on the boundary
     and names the joint.
   * **Frames.** The same twist in base and in tool produces different motion,
@@ -240,10 +291,12 @@ caught what we shipped:
 
 1. ~~The Jacobian~~ — done, `e177d76`. It was the measured defect, and it
    was not what this document first said it was.
-2. `CartesianStream` — needed for manual-speed accuracy, and needed before
-   anything in 3, 4 or 6 has a clock to run on.
-3. Straightness and speed tests, immediately after, so it stays fixed.
-4. Variable damping, κ floor, rate-limit reporting.
+2. ~~`CartesianStream`~~ — done, `93090fd`. Needed for manual-speed accuracy,
+   and needed before anything in 3, 4 or 6 had a clock to run on.
+3. ~~Straightness and speed tests~~ — done, same commit, and the 10 Hz case
+   asserts the bad number so the two rates cannot quietly become one again.
+4. ~~Variable damping, κ floor, rate-limit reporting~~ — done, `3b59796`, and
+   the first two of those three turned out to be the wrong things to build.
 5. Joint-limit stop.
 6. Tool frame, then user frames.
 7. Cartesian speed limit, then the mode interlock.
