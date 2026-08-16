@@ -377,18 +377,64 @@ change now that mode is real.
 
 ## 8. Beyond jogging
 
-Finished Cartesian is not only held motion:
+`axes.move_linear` is done. `move_arc` and the queue are not.
 
-  * `axes.move_linear` — async, not held: a target pose and a feedrate, running
-    the same stream machinery toward a target rather than along a direction,
-    terminating on arrival. `ExMove.Path.linear/4` already generates the ticks.
-  * `axes.move_arc` — `ExMove.Path.arc/6` likewise.
-  * Termination and blending — the FINE / CNT100 distinction every teach
-    pendant shows per line: whether a move settles on its point or rounds
-    through it into the next.
+### What a move is that a jog is not
 
-Those need a motion queue, which is where programs begin, and is a separate
-document.
+A jog is an assertion that somebody is still holding a button, so it needs a
+deadline and dies without one. A move has its end inside it — the arrival — and
+needs nothing to keep talking for it to finish.
+
+That difference cuts both ways and the second edge is worth stating plainly: **a
+client that disappears mid-move does not stop the arm.** That is correct for a
+command with a defined end, and it is exactly the property the watchdog exists to
+deny a jog. Anyone who wants a move stopped sends something else on the same
+object.
+
+### The stream already was this
+
+`move_linear` reuses the whole tick: the same rate ceiling, the same joint-limit
+stop, the same tool speed cap, the same reporting. What changes is only where the
+twist comes from — an error to a target rather than a direction from a client.
+Closed loop, re-solved from the live pose every tick, like everything else here;
+a precomputed path would be open loop and would drift exactly where the arm was
+already struggling.
+
+Translation and rotation are **synchronised**: time-to-go is
+`max(distance/feedrate, angle/angular_feedrate, dt)` and both errors are divided
+by it, so whichever needs longer sets the pace and they arrive together. A move
+that got there and then turned would be two moves wearing one command's name.
+
+The `dt` floor in that max is the whole deceleration story. Within one tick of
+the target the remaining error is covered in exactly that tick rather than at a
+feedrate that would carry the arm past it. No ramp, and none wanted — a ramp is a
+fact about the drives, and they have one.
+
+### Arriving is a state, not a silence
+
+`{:done, :reached}`, published as `axes.cartesian.state = "done"`. A finished move
+and a move that was never asked for must not look the same to a client.
+
+Which produced the one real bug in this section. On arrival the goal is cleared,
+and the next tick then found no goal, fell through to the held-jog path, solved
+for a twist of zeros and reported `tracking` — an arm standing perfectly still,
+described as one following a command. The internal clock stops ticking on
+arrival so it never saw this; an external one keeps being told to tick, which is
+what the tests use and what a fieldbus does.
+
+### No queue, and therefore no blending
+
+A second move replaces the first rather than following it. That is the honest
+behaviour for a build with no queue: the alternative is two commands silently
+reordering.
+
+Termination and blending — the FINE / CNT100 distinction every teach pendant
+shows per line, whether a move settles on its point or rounds through it into the
+next — need that queue, and the queue is where programs begin. Separate document,
+still.
+
+`move_arc` is the same machinery with `ExMove.Path.arc/6` supplying the error
+instead of a straight line, and is small once somebody wants it.
 
 ## 9. Studio
 
@@ -448,5 +494,6 @@ caught what we shipped:
 7. ~~Cartesian speed limit, then the mode interlock~~ — both done. Keying the
    speed limit to the mode rather than leaving it always-on is the one piece
    left, and it is small.
-8. `move_linear` / `move_arc` and the queue.
+8. ~~`move_linear`~~ — done, along with keying the tool speed limit to the mode.
+   `move_arc` and the queue remain; the queue is a separate document.
 9. Studio: Cartesian pendant, then the gizmo.

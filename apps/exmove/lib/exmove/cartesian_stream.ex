@@ -55,7 +55,7 @@ defmodule ExMove.CartesianStream do
 
   use GenServer
 
-  alias ExMove.{Chain, FK, IK, JointState}
+  alias ExMove.{Chain, FK, Frame, IK, JointState, Math}
 
   # 5ms. Each solve costs ~37µs measured, so this is under 1% of a core per arm,
   # and it puts the worst deviation at the manual speed limit comfortably inside
@@ -108,6 +108,17 @@ defmodule ExMove.CartesianStream do
   # the tool body are moving at ω×r. That gap is real and is not closed here.
   @default_max_tool_velocity 0.25
 
+  # rad/s for the rotational half of a linear move. Slower than it could be: a
+  # wrist that whips round while the tool crawls along a line is doing what was
+  # asked and not what was meant.
+  @default_angular_feedrate 0.5
+
+  # How close counts as arrived. 0.1mm is an order below what the simulated
+  # drives report, and a hair under a tenth of a degree is finer than any tool
+  # this is likely to be holding.
+  @default_position_tolerance 1.0e-4
+  @default_orientation_tolerance 1.0e-3
+
   # The fraction of the commanded tool speed below which the jog is refused
   # rather than reported as slow.
   #
@@ -121,6 +132,7 @@ defmodule ExMove.CartesianStream do
     :chain,
     :frame,
     :twist,
+    :goal,
     :hz,
     :tick_ms,
     :max_joint_velocity,
@@ -173,6 +185,58 @@ defmodule ExMove.CartesianStream do
   end
 
   @doc """
+  Move the tool centre point to `target` in a straight line, and stop there.
+
+  Not held. A jog is an assertion that someone is still pressing a button; this
+  is a command with an end in it, and the end is the arrival rather than a
+  deadline. Nothing has to keep talking to the controller for it to finish, which
+  is the whole difference — and also the thing to be careful about, because a
+  client that disappears mid-move does not stop the arm. `release/1` does, and so
+  does any other command on the same object.
+
+  Same machinery as the jog underneath: same tick, same rate ceiling, same
+  joint-limit stop, same tool speed cap, same reporting. What changes is where
+  the twist comes from — an error to a target rather than a direction from a
+  client.
+
+  ## Options
+
+    * `:feedrate` — m/s at the tool. Required in spirit; defaults to the manual
+      speed limit.
+    * `:angular_feedrate` — rad/s. Translation and rotation are synchronised, so
+      whichever of the two needs longer sets the pace and they arrive together.
+      A move that got there and then turned would not be one move.
+    * everything `hold/3` takes.
+  """
+  def move_linear(%Chain{} = chain, %Frame{} = target, opts \\ []) do
+    goal = %{
+      transform: FK.frame_transform(target),
+      feedrate: Keyword.get(opts, :feedrate, @default_max_tool_velocity),
+      angular_feedrate: Keyword.get(opts, :angular_feedrate, @default_angular_feedrate),
+      position_tolerance: Keyword.get(opts, :position_tolerance, @default_position_tolerance),
+      orientation_tolerance:
+        Keyword.get(opts, :orientation_tolerance, @default_orientation_tolerance)
+    }
+
+    # Replaces whatever the arm was doing rather than queueing behind it. There
+    # is no motion queue yet — that is where programs begin and is a separate
+    # document — so the honest behaviour is the one that cannot silently reorder
+    # two commands.
+    release(chain.name)
+
+    opts =
+      opts
+      |> Keyword.put(:chain, chain)
+      |> Keyword.put(:twist, List.duplicate(0.0, 6))
+      |> Keyword.put(:goal, goal)
+
+    case DynamicSupervisor.start_child(ExMove.StreamSupervisor, {__MODULE__, opts}) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Stop the stream for `arm`, commanding zero on the way out.
 
   The explicit zero is what makes a released button feel attached to the machine.
@@ -221,6 +285,9 @@ defmodule ExMove.CartesianStream do
       travel and the command asks to go further. Not a fault and not latched:
       jog the other way and the next tick tracks.
     * `{:refused, :unreadable}` — a joint could not be read.
+    * `{:done, :reached}` — a `move_linear/3` arrived. The stream stops ticking
+      and stays put, so that "finished" and "was never asked" are different
+      answers to a client rather than both being silence.
 
   A pendant that says "limited: near singularity" is a machine explaining
   itself. One that silently slows down is a machine that feels broken, and this
@@ -300,6 +367,7 @@ defmodule ExMove.CartesianStream do
         chain: chain,
         frame: Keyword.get(opts, :frame, :base),
         twist: Keyword.fetch!(opts, :twist),
+        goal: Keyword.get(opts, :goal),
         hz: hz,
         tick_ms: max(round(1000 / hz), 1),
         max_joint_velocity: Keyword.get(opts, :max_joint_velocity, @default_max_joint_velocity),
@@ -320,8 +388,14 @@ defmodule ExMove.CartesianStream do
     # Only the intent. Not the timer, not the phase: an assertion arriving
     # between two ticks must not be able to shorten or lengthen either of them,
     # or the client's jitter becomes the arm's.
-    {:noreply, %{state | frame: frame, twist: twist}}
+    # A refresh un-finishes the stream. Whoever is asserting now is asking for
+    # motion, and leaving `{:done, :reached}` in place would leave the guard
+    # above swallowing every tick of it.
+    {:noreply, %{state | frame: frame, twist: twist, goal: nil, status: status_after_refresh(state)}}
   end
+
+  defp status_after_refresh(%{status: {:done, _reason}}), do: :idle
+  defp status_after_refresh(%{status: status}), do: status
 
   @impl true
   def handle_call({:tick, dt}, _from, %{clock: :external} = state) do
@@ -340,7 +414,15 @@ defmodule ExMove.CartesianStream do
   @impl true
   def handle_info(:tick, state) do
     {state, _result} = step(state, state.tick_ms / 1000.0)
-    {:noreply, schedule(state)}
+
+    # A finished move stops ticking. Solving repeatedly for a twist that is zero
+    # by construction is work with a known answer, and leaving the timer running
+    # would make an arrived arm indistinguishable from a moving one to anything
+    # watching the process rather than the status.
+    case state.status do
+      {:done, _reason} -> {:noreply, state}
+      _still_going -> {:noreply, schedule(state)}
+    end
   end
 
   @impl true
@@ -354,17 +436,104 @@ defmodule ExMove.CartesianStream do
   # `dt` is passed rather than read from the state because the joint-limit stop
   # in section 4 of protocol/CARTESIAN.md needs to predict `q + dq·dt`, and a
   # tick that does not know its own length cannot.
+  # A finished move stays finished. Without this the next tick finds no goal,
+  # falls through to the held-jog path, solves for a twist of zeros and reports
+  # `:tracking` — an arm standing still, described as one that is following a
+  # command. The internal clock stops ticking on arrival so it never sees this;
+  # an external one keeps being told to tick, which is how the tests found it and
+  # is also what a fieldbus does.
+  defp step(%{status: {:done, _reason}} = state, _dt), do: {state, {:ok, :reached}}
+
   defp step(state, dt) do
     with {:ok, positions} <- joint_positions(state.chain),
          js = %JointState{positions: positions},
-         {:ok, twist} <- in_base(state.frame, state.chain, js, state.twist),
-         {:ok, %JointState{velocities: dq}, report} <-
-           IK.solve_velocity(state.chain, js, twist) do
-      apply_solution(state, positions, dq, twist, report, dt)
+         {:ok, twist} <- commanded_twist(state, js, dt) do
+      case twist do
+        :arrived ->
+          write(state.chain, List.duplicate(0.0, length(state.chain.axis_ids)))
+          {%{state | goal: nil, status: {:done, :reached}}, {:ok, :reached}}
+
+        twist ->
+          case IK.solve_velocity(state.chain, js, twist) do
+            {:ok, %JointState{velocities: dq}, report} ->
+              apply_solution(state, positions, dq, twist, report, dt)
+
+            {:error, reason} ->
+              refuse(state, reason)
+          end
+      end
     else
       {:error, reason} -> refuse(state, reason)
     end
   end
+
+  # Where the twist comes from. A held jog has one handed to it; a move works one
+  # out from how far it still has to go.
+  defp commanded_twist(%{goal: nil} = state, js, _dt) do
+    in_base(state.frame, state.chain, js, state.twist)
+  end
+
+  defp commanded_twist(%{goal: goal} = state, js, dt) do
+    current = FK.solve_transform(state.chain, js)
+
+    {ex, ey, ez} = position_error(current, goal.transform)
+    {ax, ay, az} = orientation_error(current, goal.transform)
+
+    distance = norm(ex, ey, ez)
+    angle = norm(ax, ay, az)
+
+    if distance < goal.position_tolerance and angle < goal.orientation_tolerance do
+      {:ok, :arrived}
+    else
+      # Translation and rotation are synchronised: whichever needs longer sets
+      # the pace and both arrive together. A move that got there and then turned
+      # would be two moves wearing one command's name.
+      #
+      # `dt` is the floor, and it is what stops the arm overshooting: within one
+      # tick of the target the remaining error is covered in exactly that tick
+      # rather than at a feedrate that would carry it past. No separate
+      # deceleration ramp, and none wanted — a ramp is a fact about the drives,
+      # which have one.
+      seconds =
+        [distance / goal.feedrate, angle / goal.angular_feedrate, dt]
+        |> Enum.max()
+
+      {:ok, [ex / seconds, ey / seconds, ez / seconds, ax / seconds, ay / seconds, az / seconds]}
+    end
+  end
+
+  defp position_error(current, target) do
+    {cx, cy, cz} = Math.translation_of(current)
+    {tx, ty, tz} = Math.translation_of(target)
+    {tx - cx, ty - cy, tz - cz}
+  end
+
+  # The same form the Rust position solver uses — half the sum of the cross
+  # products of the corresponding axis pairs. It is an approximation to the
+  # rotation vector that is exact in direction and shrinks as sin of the angle,
+  # which is everything a resolved-rate loop needs and is the same arithmetic on
+  # both sides of the NIF boundary. Two ways of measuring the same error that
+  # disagree slightly is a thing to avoid on principle.
+  defp orientation_error(current, target) do
+    [{c, t} | rest] = Enum.zip(columns(current), columns(target))
+
+    {x, y, z} =
+      Enum.reduce(rest, cross(c, t), fn {c, t}, acc -> add(acc, cross(c, t)) end)
+
+    {0.5 * x, 0.5 * y, 0.5 * z}
+  end
+
+  defp columns({m0, m1, m2, _, m4, m5, m6, _, m8, m9, m10, _, _, _, _, _}) do
+    [{m0, m4, m8}, {m1, m5, m9}, {m2, m6, m10}]
+  end
+
+  defp cross({ax, ay, az}, {bx, by, bz}) do
+    {ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx}
+  end
+
+  defp add({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
+
+  defp norm(x, y, z), do: :math.sqrt(x * x + y * y + z * z)
 
   # Refuse first, then scale, then write.
   #

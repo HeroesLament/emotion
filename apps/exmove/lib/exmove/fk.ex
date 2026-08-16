@@ -64,6 +64,16 @@ defmodule ExMove.FK do
     |> Enum.map(&transform_to_frame/1)
   end
 
+  @doc """
+  A `%Frame{}` as a transform.
+
+  Public because a target pose is a frame and anything comparing one against
+  where the arm actually is needs both in the same representation — and building
+  a second copy of this conversion is how two parts of a controller come to
+  disagree about what a pose means.
+  """
+  def frame_transform(frame), do: frame_to_transform(frame)
+
   # --- Private --------------------------------------------------------------
 
   defp joint_transform(joint, theta) do

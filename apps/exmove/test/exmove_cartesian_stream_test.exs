@@ -464,6 +464,164 @@ defmodule ExMove.CartesianStreamTest do
     end
   end
 
+  describe "move_linear" do
+    test "arrives at the target and stops", ctx do
+      %{chain: chain, axis_ids: axis_ids} = ctx
+
+      from = tcp(chain)
+      target = %ExMove.Frame{from | z: from.z + 0.08}
+
+      :ok = CartesianStream.move_linear(chain, target, clock: :external, hz: 200, feedrate: 0.05)
+
+      run(ctx, 200, 3.0)
+
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+
+      arrived = tcp(chain)
+      assert_in_delta arrived.z, target.z, 1.0e-3
+      assert_in_delta arrived.x, from.x, 1.0e-3
+      assert_in_delta arrived.y, from.y, 1.0e-3
+
+      for axis_id <- axis_ids do
+        assert Exdrive.Drive.status(axis_id).target_velocity == 0.0,
+               "#{axis_id} was still commanded after arriving"
+      end
+    end
+
+    test "does not overshoot", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      target = %ExMove.Frame{from | z: from.z + 0.08}
+
+      :ok = CartesianStream.move_linear(chain, target, clock: :external, hz: 200, feedrate: 0.05)
+
+      # Sampled every tick, because an overshoot is corrected on the next one and
+      # a coarser sample would never see it. This is what the `dt` floor on the
+      # time-to-go is for: within one tick of the target the arm covers exactly
+      # what is left rather than another tick's worth of feedrate.
+      worst =
+        Enum.reduce(1..600, from.z, fn _i, worst ->
+          step(ctx, 200)
+          max(worst, tcp(chain).z)
+        end)
+
+      assert worst <= target.z + 1.0e-4,
+             "overshot to #{Float.round((worst - target.z) * 1000, 3)}mm past the target"
+    end
+
+    test "travels in a straight line, not just to the right place", ctx do
+      %{chain: chain} = ctx
+
+      extend(ctx, [0.0, 0.4, -1.0, 0.0, 2.2, 0.0])
+      from = tcp(chain)
+      target = %ExMove.Frame{from | y: from.y - 0.08}
+
+      :ok = CartesianStream.move_linear(chain, target, clock: :external, hz: 200, feedrate: 0.05)
+
+      run(ctx, 200, 0.25)
+
+      worst =
+        Enum.reduce(1..400, 0.0, fn _i, worst ->
+          step(ctx, 200)
+          p = tcp(chain)
+          max(worst, :math.sqrt(:math.pow(p.x - from.x, 2) + :math.pow(p.z - from.z, 2)))
+        end)
+
+      assert worst < 0.001,
+             "left the commanded line by #{Float.round(worst * 1000, 3)}mm"
+    end
+
+    test "holds the feedrate it was given", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      target = %ExMove.Frame{from | z: from.z + 0.15}
+
+      :ok = CartesianStream.move_linear(chain, target, clock: :external, hz: 200, feedrate: 0.05)
+
+      run(ctx, 200, 0.25)
+      start = tcp(chain)
+      run(ctx, 200, 1.0)
+
+      assert_in_delta distance(start, tcp(chain)), 0.05, 0.005
+    end
+
+    test "reorienting and translating arrive together", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      target = %ExMove.Frame{from | z: from.z + 0.05, rx: from.rx + 0.3}
+
+      :ok =
+        CartesianStream.move_linear(chain, target,
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05,
+          angular_feedrate: 0.5
+        )
+
+      run(ctx, 200, 4.0)
+
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+
+      arrived = tcp(chain)
+      assert_in_delta arrived.z, target.z, 1.0e-3
+      assert_in_delta arrived.rx, target.rx, 5.0e-3
+    end
+
+    test "the tool speed cap applies to a move as much as to a jog", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      target = %ExMove.Frame{from | z: from.z + 0.5}
+
+      # A metre a second, asked for as a feedrate rather than as a jog. Same
+      # machinery, so the same 250 mm/s answer — the cap is a property of the
+      # controller, not of one command.
+      :ok =
+        CartesianStream.move_linear(chain, target,
+          clock: :external,
+          hz: 200,
+          feedrate: 1.0,
+          max_joint_velocity: 5.0
+        )
+
+      step(ctx, 200)
+
+      assert {:limited, :tool_speed, fraction} = CartesianStream.status(chain.name)
+      assert_in_delta fraction, 0.25, 0.01
+    end
+
+    test "a move replaces a jog rather than fighting it", ctx do
+      %{chain: chain} = ctx
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      run(ctx, 200, 0.2)
+
+      from = tcp(chain)
+      target = %ExMove.Frame{from | z: from.z + 0.02}
+
+      :ok = CartesianStream.move_linear(chain, target, clock: :external, hz: 200, feedrate: 0.05)
+
+      # There is no motion queue yet, so the honest behaviour is the one that
+      # cannot silently reorder two commands: the second replaces the first.
+      assert CartesianStream.intent(chain.name) == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+      run(ctx, 200, 2.0)
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+    end
+
+    test "a zero-length move is already finished", ctx do
+      %{chain: chain} = ctx
+
+      :ok = CartesianStream.move_linear(chain, tcp(chain), clock: :external, hz: 200, feedrate: 0.05)
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+    end
+  end
+
   # ── Helpers ───────────────────────────────────────────────────────────────
 
   defp assert_straight(ctx, speed, hz, tolerance_mm) do
