@@ -179,15 +179,21 @@ defmodule ExMove.CartesianStream do
 
     * `:idle` — no tick has run yet.
     * `:tracking` — the commanded twist is being delivered.
-    * `{:limited, fraction}` — a joint would have had to turn faster than its
-      ceiling, so the whole motion is scaled to `fraction` of the commanded tool
-      speed. The tool is still exactly on the commanded line. This is what
+    * `{:limited, :rate, fraction}` — a joint would have had to turn faster than
+      its ceiling, so the whole motion is scaled to `fraction` of the commanded
+      tool speed. The tool is still exactly on the commanded line. This is what
       approaching a singularity looks like from the inside, and the number is the
       point: "moving at 12% of commanded" is a machine explaining itself.
+    * `{:limited, {:joint_limit, axis_id}, fraction}` — that joint is about to
+      reach the end of its travel, and the whole motion is slowed so the arm
+      lands on the boundary rather than a tick past it.
     * `{:refused, :singular}` — either the command is not achievable in the
       direction asked, or the achievable fraction of it has collapsed to nothing.
       Zero is written and the arm stops. Use joint jog, which is the only way out
       of a singularity.
+    * `{:refused, {:joint_limit, axis_id}}` — that joint is *at* the end of its
+      travel and the command asks to go further. Not a fault and not latched:
+      jog the other way and the next tick tracks.
     * `{:refused, :unreadable}` — a joint could not be read.
 
   A pendant that says "limited: near singularity" is a machine explaining
@@ -320,11 +326,11 @@ defmodule ExMove.CartesianStream do
   # `dt` is passed rather than read from the state because the joint-limit stop
   # in section 4 of protocol/CARTESIAN.md needs to predict `q + dq·dt`, and a
   # tick that does not know its own length cannot.
-  defp step(state, _dt) do
+  defp step(state, dt) do
     with {:ok, positions} <- joint_positions(state.chain),
          {:ok, %JointState{velocities: dq}, report} <-
            IK.solve_velocity(state.chain, %JointState{positions: positions}, state.twist) do
-      apply_solution(state, dq, report)
+      apply_solution(state, positions, dq, report, dt)
     else
       {:error, reason} -> refuse(state, reason)
     end
@@ -337,8 +343,17 @@ defmodule ExMove.CartesianStream do
   # hold above lapses would mean an arm that could not do what was asked carries
   # on doing the last thing it could, for up to a deadline. An arm that stops
   # because it has run out of arm should stop.
-  defp apply_solution(state, dq, report) do
-    fraction = scale_factor(dq, state.max_joint_velocity)
+  defp apply_solution(state, positions, dq, report, dt) do
+    rate = rate_factor(dq, state.max_joint_velocity)
+    {limit, joint} = limit_factor(state.chain, positions, dq, dt)
+
+    # Both are uniform scales of the same raw vector, so the binding one is
+    # simply the smaller, and comparing them is comparing like with like. This
+    # is also why the limit factor is computed from the unscaled dq rather than
+    # from the rate-scaled one: two fractions of the same thing compose by
+    # taking a minimum, two fractions of each other compose by multiplying, and
+    # only one of those is what "stop on the boundary" means.
+    {fraction, reason} = if limit < rate, do: {limit, {:joint_limit, joint}}, else: {rate, :rate}
 
     cond do
       # Not the direction asked for. Almost always exactly zero, so this fires
@@ -346,32 +361,92 @@ defmodule ExMove.CartesianStream do
       report.residual > state.residual_floor ->
         refuse(state, :singular)
 
-      # On the line, and going nowhere. The arm has not failed; it has reached
-      # the edge of what this pose can do, which is a different sentence and
-      # deserves to be said rather than shown as a freeze.
+      # Going nowhere. Which of the two reasons put it there is carried through
+      # rather than collapsed: "the arm stopped" is a support call, and "J5 is at
+      # its limit" is something an operator can act on without one.
       fraction < state.speed_floor ->
-        refuse(state, :singular)
+        refuse(state, refusal_reason(reason))
 
       true ->
         velocities = Enum.map(dq, &(&1 * fraction))
         write(state.chain, velocities)
 
-        status = if fraction < 1.0, do: {:limited, fraction}, else: :tracking
+        status = if fraction < 1.0, do: {:limited, reason, fraction}, else: :tracking
         {%{state | status: status}, {:ok, velocities}}
     end
   end
+
+  # A rate ceiling that has scaled the motion to nothing is a singularity by
+  # another name — it is what approaching one looks like from the rate side. A
+  # joint limit is not, and keeps its own name.
+  defp refusal_reason({:joint_limit, joint}), do: {:joint_limit, joint}
+  defp refusal_reason(:rate), do: :singular
 
   defp refuse(state, reason) do
     write(state.chain, List.duplicate(0.0, length(state.chain.axis_ids)))
     {%{state | status: {:refused, reason}}, {:error, reason}}
   end
 
-  # The fraction of the commanded motion that fits under the ceiling. One number
-  # for the whole vector, which is what keeps the direction intact.
-  defp scale_factor(dq, ceiling) do
+  # The fraction of the commanded motion that fits under the rate ceiling. One
+  # number for the whole vector, which is what keeps the direction intact.
+  defp rate_factor(dq, ceiling) do
     peak = dq |> Enum.map(&abs/1) |> Enum.max()
 
     if peak > ceiling, do: ceiling / peak, else: 1.0
+  end
+
+  # The fraction of this tick's motion that fits inside every joint's travel,
+  # and the joint that decided it.
+  #
+  # This is where `dt` finally earns the ride it has been getting since the
+  # stream landed. A limit is a position and a tick commands a velocity, and the
+  # only thing that converts between them is the length of the tick. Scaled by
+  # this factor the arm lands exactly on the boundary at the end of the tick
+  # rather than a controller-cycle past it.
+  #
+  # The whole vector again, not the offending joint: stopping one joint of six
+  # and letting the others run is a change of direction, and the operator asked
+  # for a direction.
+  # The joint is named by its `axis_id` and not by `joint.id`. Those are two
+  # different mappings on a `Chain` — one is what the chain calls a joint, the
+  # other is the drive it is bound to — and they coincide on the demo arm, which
+  # is exactly the sort of coincidence that hides a wrong name until a machine
+  # with renamed axes reports a joint the client has never heard of. The client
+  # only knows axis ids; every other node id in the model is built from them.
+  defp limit_factor(chain, positions, dq, dt) do
+    chain.axis_ids
+    |> Enum.zip(chain.joints)
+    |> Enum.zip(Enum.zip(positions, dq))
+    |> Enum.reduce({1.0, nil}, fn {{axis_id, joint}, {q, rate}}, {best, chosen} ->
+      case travel_fraction(joint.limit, q, rate * dt) do
+        nil -> {best, chosen}
+        f when f < best -> {f, axis_id}
+        _ -> {best, chosen}
+      end
+    end)
+  end
+
+  # nil means continuous — a joint that can turn forever, and a great many can.
+  defp travel_fraction(nil, _q, _step), do: nil
+
+  # lo >= hi is the other way a chain says continuous, and it is the one the NIF
+  # boundary uses. Accepted here so that one description of a joint does not mean
+  # two things depending on which side of the language boundary is reading it.
+  defp travel_fraction({lo, hi}, _q, _step) when lo >= hi, do: nil
+
+  defp travel_fraction(_limit, _q, step) when step == 0.0, do: nil
+
+  defp travel_fraction({lo, hi}, q, step) do
+    room = if step > 0.0, do: hi - q, else: lo - q
+
+    cond do
+      # Already outside, and still heading out. Nothing about this tick is
+      # allowed. It should not happen, and a limit check that assumes it cannot
+      # is a limit check that fails open the one time it matters.
+      room / step <= 0.0 -> 0.0
+      room / step < 1.0 -> room / step
+      true -> nil
+    end
   end
 
   defp write(chain, velocities) do

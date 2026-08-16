@@ -167,7 +167,7 @@ defmodule ExMove.CartesianStreamTest do
       :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
       step(ctx, 200)
 
-      assert {:limited, fraction} = CartesianStream.status(chain.name)
+      assert {:limited, :rate, fraction} = CartesianStream.status(chain.name)
       assert fraction > 0.0 and fraction < 1.0
     end
 
@@ -225,6 +225,94 @@ defmodule ExMove.CartesianStreamTest do
 
       :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
       step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == :tracking
+    end
+  end
+
+  describe "joint limits" do
+    # The demo chain's joints travel ±3.05 rad, which a Cartesian jog will not
+    # reach in any test that finishes. So the chain is given a tight limit on one
+    # joint: it is the same code path, with the boundary moved somewhere a test
+    # can get to.
+    setup ctx do
+      joints = List.update_at(ctx.chain.joints, 1, &%{&1 | limit: {-3.05, 0.62}})
+
+      %{chain: %{ctx.chain | joints: joints}}
+    end
+
+    test "stops on the boundary and names the joint", ctx do
+      %{chain: chain, axis_ids: axis_ids} = ctx
+      j2 = Enum.at(axis_ids, 1)
+
+      # Bent pose puts j2 at 0.6, so there is 0.02 rad of travel left. A +Z jog
+      # drives it further positive.
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      run(ctx, 200, 1.0)
+
+      assert {:refused, {:joint_limit, :cs_j2}} = CartesianStream.status(chain.name)
+
+      position = Exdrive.Drive.status(j2).actual_position
+
+      # On the boundary, not past it. The tolerance is the drive's own reporting
+      # resolution plus one tick of the ramp it is still coming off, not slack in
+      # the check: the point of predicting `q + dq·dt` is that the arm arrives
+      # exactly here rather than a controller cycle beyond.
+      assert position <= 0.62 + 1.0e-3,
+             "j2 went past its 0.62 limit to #{position}"
+
+      assert position > 0.61, "j2 stopped short of its limit at #{position}"
+    end
+
+    test "slows before it stops rather than arriving at speed", ctx do
+      %{chain: chain} = ctx
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+
+      # Somewhere in the approach the motion is scaled by the limit rather than
+      # by the rate ceiling. Catching it requires looking every tick: the window
+      # is one tick wide by construction, because that is exactly how far ahead
+      # the check looks.
+      seen =
+        Enum.reduce(1..200, [], fn _i, acc ->
+          step(ctx, 200)
+          [CartesianStream.status(chain.name) | acc]
+        end)
+
+      assert Enum.any?(seen, &match?({:limited, {:joint_limit, :cs_j2}, _fraction}, &1)),
+             "went from tracking straight to refused with no limiting in between"
+    end
+
+    test "jogging away from the limit is not refused", ctx do
+      %{chain: chain} = ctx
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      run(ctx, 200, 1.0)
+      assert {:refused, {:joint_limit, _}} = CartesianStream.status(chain.name)
+
+      # The whole point of not latching. An arm parked on a limit with no way off
+      # it is worse than one that never stopped.
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, -0.05, 0.0, 0.0, 0.0])
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == :tracking
+    end
+
+    test "a continuous joint is not treated as one at zero", ctx do
+      # `nil` and `lo >= hi` both mean "this joint turns forever". A limit check
+      # that read either as a bound at the origin would refuse every jog on a
+      # chain with a continuous wrist, which is most of them.
+      %{chain: chain} = ctx
+
+      chain =
+        update_in(chain.joints, fn joints ->
+          joints
+          |> List.update_at(1, &%{&1 | limit: nil})
+          |> List.update_at(4, &%{&1 | limit: {1.0, -1.0}})
+        end)
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      run(ctx, 200, 0.5)
 
       assert CartesianStream.status(chain.name) == :tracking
     end

@@ -201,15 +201,40 @@ mechanisms.
 
 ## 4. Joint limits
 
-A Cartesian jog that drives a joint into its limit must stop *before* it.
-Per tick: predict `q + dq·dt`, and if any joint would cross, scale the whole
-vector so the arm stops on the boundary — same uniform-scaling rule, same
-reason. Report which joint. "The arm stopped because J5 is at its limit" is
-actionable; "the arm stopped" is a support call.
+Done in the stream, per tick. Predict `q + dq·dt`; if any joint would cross,
+scale the whole vector so the arm lands on the boundary at the end of the tick
+rather than a controller cycle past it.
 
-Self-collision is the same class of problem and much larger: a capsule model
-per link and a broad-phase check. Out of scope, named here because "the arm can
-move through itself" is a real gap and should not be discovered by an arm.
+This is the first thing that uses `dt`, and it is why the tick carries it. A
+limit is a position, a tick commands a velocity, and the length of the tick is
+the only thing that converts between them.
+
+The whole vector, not the offending joint — the same rule as the rate ceiling
+and for the same reason. Stopping one joint of six and letting the other five
+run is a change of direction, and the operator asked for a direction.
+
+Two things worth having found:
+
+  * The joint is named by its **axis id**, not by `joint.id`. A `Chain` carries
+    both and they are different mappings — what the chain calls a joint, and the
+    drive it is bound to. They coincide on the demo arm, which is exactly the
+    kind of coincidence that hides a wrong name until a machine with renamed
+    axes reports a joint the client has never heard of.
+  * Continuous joints are spelled two ways. `limit: nil` on the Elixir side and
+    `limit_lo >= limit_hi` at the NIF boundary. Both are accepted, so that one
+    description of a joint does not mean two things depending on which side of
+    the language boundary is reading it. Reading either as a bound at the origin
+    would refuse every jog on a chain with a continuous wrist.
+
+Reported like everything else: `{:limited, {:joint_limit, axis}, fraction}` while
+approaching, `{:refused, {:joint_limit, axis}}` on the boundary, and
+`axes.cartesian.joint` names it. "The arm stopped" is a support call. Not
+latched — jog the other way and the next tick tracks, because being at the end
+of a joint's travel is not a fault.
+
+Self-collision is the same class of problem and much larger: a capsule model per
+link and a broad-phase check. Out of scope, named here because "the arm can move
+through itself" is a real gap and should not be discovered by an arm.
 
 ## 5. Branch continuity
 
@@ -280,8 +305,10 @@ caught what we shipped:
     assert the rates diverge at one and not the other, that the residual sees
     the difference and manipulability does not, and that the stream reports
     limited before it reports refused.
-  * **Limits.** Jog into a joint limit; assert the arm stops on the boundary
-    and names the joint.
+  * **Limits.** Done — `exmove_cartesian_stream_test.exs`. Jog into a joint
+    limit; assert the arm stops on the boundary and not past it, that it slowed
+    before it stopped rather than arriving at speed, that it names the joint,
+    and that jogging away is not refused.
   * **Frames.** The same twist in base and in tool produces different motion,
     hand-checkable at a known pose.
   * **Hold.** Already covered by the watchdog tests, and unchanged by any of
@@ -297,7 +324,8 @@ caught what we shipped:
    asserts the bad number so the two rates cannot quietly become one again.
 4. ~~Variable damping, κ floor, rate-limit reporting~~ — done, `3b59796`, and
    the first two of those three turned out to be the wrong things to build.
-5. Joint-limit stop.
+5. ~~Joint-limit stop~~ — done. The first thing to use the `dt` the tick has
+   been carrying since the stream landed.
 6. Tool frame, then user frames.
 7. Cartesian speed limit, then the mode interlock.
 8. `move_linear` / `move_arc` and the queue.

@@ -323,11 +323,11 @@ defmodule ExMo.Schema.Registry do
           name: "State",
           description:
             "idle | tracking | limited | refused. `limited` means the motion " <>
-              "is on the commanded line and slower than asked, which is what " <>
-              "approaching a singularity looks like; read `speed_fraction` for " <>
-              "how much slower. `refused` means the arm cannot go where it was " <>
-              "pointed and has been commanded to zero — use a joint jog, which " <>
-              "is the only way out of a singularity.",
+              "is on the commanded line and slower than asked; read " <>
+              "`speed_fraction` for how much slower and `reason` for why. " <>
+              "`refused` means the arm cannot go where it was pointed and has " <>
+              "been commanded to zero. Neither is a fault and neither latches: " <>
+              "jog somewhere else and the next tick tracks.",
           type: :string,
           readable: true,
           writable: false,
@@ -343,6 +343,35 @@ defmodule ExMo.Schema.Registry do
               "scaled — so the direction is exactly as commanded and only the " <>
               "speed gives way.",
           type: :double,
+          readable: true,
+          writable: false,
+          observable: true
+        },
+        %Property{
+          id: "axes.cartesian.reason",
+          name: "Reason",
+          description:
+            "Why the motion is limited or refused, empty when it is neither. " <>
+              "`rate` — a joint would have to turn faster than it can, which is " <>
+              "what approaching a singularity looks like from the rate side. " <>
+              "`joint_limit` — a joint is at or approaching the end of its " <>
+              "travel; `joint` names it. `singular` — the arm cannot move in " <>
+              "the direction asked at all. `unreadable` — a joint could not be " <>
+              "read, which is a wiring problem rather than a kinematic one.",
+          type: :string,
+          readable: true,
+          writable: false,
+          observable: true
+        },
+        %Property{
+          id: "axes.cartesian.joint",
+          name: "Joint",
+          description:
+            "The axis that is limiting the motion, empty when none is. " <>
+              "Populated when `reason` is joint_limit. \"The arm stopped\" is a " <>
+              "support call; \"J5 is at its limit\" is something an operator can " <>
+              "act on without one, and the difference is this node.",
+          type: :string,
           readable: true,
           writable: false,
           observable: true

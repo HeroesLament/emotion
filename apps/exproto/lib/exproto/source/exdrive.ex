@@ -152,19 +152,38 @@ defmodule ExProto.Source.Exdrive do
     case status do
       :idle -> {:ok, "idle"}
       :tracking -> {:ok, "tracking"}
-      {:limited, _fraction} -> {:ok, "limited"}
+      {:limited, _reason, _fraction} -> {:ok, "limited"}
       {:refused, _reason} -> {:ok, "refused"}
     end
   end
 
   defp cartesian_value("axes.cartesian.speed_fraction", status) do
     case status do
-      {:limited, fraction} -> {:ok, fraction}
+      {:limited, _reason, fraction} -> {:ok, fraction}
       # Refused is 0.0 and not "the fraction it would have managed". The arm has
       # been commanded to zero, and a speed node reporting anything else while
       # the arm is stopped is the node lying about the machine.
       {:refused, _reason} -> {:ok, 0.0}
       _tracking_or_idle -> {:ok, 1.0}
+    end
+  end
+
+  defp cartesian_value("axes.cartesian.reason", status) do
+    case status do
+      {:limited, reason, _fraction} -> {:ok, reason_name(reason)}
+      {:refused, reason} -> {:ok, reason_name(reason)}
+      _tracking_or_idle -> {:ok, ""}
+    end
+  end
+
+  # Empty rather than absent, and empty rather than "none". A pendant binding a
+  # label to this node wants a string on every read, including the reads where
+  # there is nothing to say.
+  defp cartesian_value("axes.cartesian.joint", status) do
+    case status do
+      {:limited, {:joint_limit, joint}, _fraction} -> {:ok, Atom.to_string(joint)}
+      {:refused, {:joint_limit, joint}} -> {:ok, Atom.to_string(joint)}
+      _no_joint -> {:ok, ""}
     end
   end
 
@@ -184,6 +203,9 @@ defmodule ExProto.Source.Exdrive do
   end
 
   defp cartesian_value(_unknown, _status), do: {:error, :unknown_node}
+
+  defp reason_name({:joint_limit, _joint}), do: "joint_limit"
+  defp reason_name(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp cartesian?(node_id), do: String.starts_with?(node_id, "axes.cartesian.")
 
