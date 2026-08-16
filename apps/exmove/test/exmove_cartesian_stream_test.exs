@@ -593,23 +593,31 @@ defmodule ExMove.CartesianStreamTest do
       assert_in_delta fraction, 0.25, 0.01
     end
 
-    test "a move replaces a jog rather than fighting it", ctx do
+    test "a jog clears the queue rather than being followed by it", ctx do
       %{chain: chain} = ctx
 
-      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
-      run(ctx, 200, 0.2)
-
       from = tcp(chain)
-      target = %ExMove.Frame{from | z: from.z + 0.02}
 
-      :ok = CartesianStream.move_linear(chain, target, clock: :external, hz: 200, feedrate: 0.05)
+      :ok =
+        CartesianStream.move_linear(chain, %ExMove.Frame{from | z: from.z + 0.02},
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05
+        )
 
-      # There is no motion queue yet, so the honest behaviour is the one that
-      # cannot silently reorder two commands: the second replaces the first.
-      assert CartesianStream.intent(chain.name) == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      :ok = CartesianStream.move_linear(chain, %ExMove.Frame{from | z: from.z + 0.04}, feedrate: 0.05)
+      assert CartesianStream.queued(chain.name) == 1
 
-      run(ctx, 200, 2.0)
-      assert CartesianStream.status(chain.name) == {:done, :reached}
+      # An operator taking hold of the arm has taken hold of it. Queued moves
+      # firing afterwards because nobody thought to cancel them is how a machine
+      # surprises somebody.
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0])
+
+      assert CartesianStream.queued(chain.name) == 0
+      assert CartesianStream.intent(chain.name) == [0.0, 0.0, 0.05, 0.0, 0.0, 0.0]
+
+      run(ctx, 200, 0.5)
+      assert CartesianStream.status(chain.name) == :tracking
     end
 
     test "a zero-length move is already finished", ctx do
@@ -619,6 +627,215 @@ defmodule ExMove.CartesianStreamTest do
       step(ctx, 200)
 
       assert CartesianStream.status(chain.name) == {:done, :reached}
+    end
+  end
+
+  describe "the motion queue" do
+    test "a second move follows the first rather than replacing it", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      first = %ExMove.Frame{from | z: from.z + 0.04}
+      second = %ExMove.Frame{first | y: first.y - 0.04}
+
+      :ok = CartesianStream.move_linear(chain, first, clock: :external, hz: 200, feedrate: 0.05)
+      :ok = CartesianStream.move_linear(chain, second, feedrate: 0.05)
+
+      assert CartesianStream.queued(chain.name) == 1
+
+      run(ctx, 200, 4.0)
+
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+      assert CartesianStream.queued(chain.name) == 0
+
+      arrived = tcp(chain)
+      assert_in_delta arrived.z, second.z, 1.0e-3
+      assert_in_delta arrived.y, second.y, 1.0e-3
+    end
+
+    test "the corner is turned, not cut, with FINE termination", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      corner = %ExMove.Frame{from | z: from.z + 0.04}
+      finish = %ExMove.Frame{corner | y: corner.y - 0.04}
+
+      :ok = CartesianStream.move_linear(chain, corner, clock: :external, hz: 200, feedrate: 0.05)
+      :ok = CartesianStream.move_linear(chain, finish, feedrate: 0.05)
+
+      closest =
+        Enum.reduce(1..800, 1.0, fn _i, closest ->
+          step(ctx, 200)
+          p = tcp(chain)
+          min(closest, :math.sqrt(:math.pow(p.z - corner.z, 2) + :math.pow(p.y - corner.y, 2)))
+        end)
+
+      # Default termination settles on the point. Anything more than the arrival
+      # tolerance away and the arm never actually reached the corner it was told
+      # to go to.
+      assert closest < 1.0e-3,
+             "missed the corner by #{Float.round(closest * 1000, 3)}mm"
+    end
+
+    test "a blend rounds the corner and keeps moving", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      corner = %ExMove.Frame{from | z: from.z + 0.04}
+      finish = %ExMove.Frame{corner | y: corner.y - 0.04}
+
+      :ok =
+        CartesianStream.move_linear(chain, corner,
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05,
+          blend: 0.01
+        )
+
+      :ok = CartesianStream.move_linear(chain, finish, feedrate: 0.05)
+
+      {closest, slowest} =
+        Enum.reduce(1..800, {1.0, 1.0}, fn _i, {closest, slowest} ->
+          before = tcp(chain)
+          step(ctx, 200)
+          p = tcp(chain)
+
+          d = :math.sqrt(:math.pow(p.z - corner.z, 2) + :math.pow(p.y - corner.y, 2))
+          moved = distance(before, p) * 200
+
+          # Only while it is anywhere near the corner; the ends of the move are
+          # legitimately slow and are not what this is measuring.
+          if d < 0.02, do: {min(closest, d), min(slowest, moved)}, else: {closest, slowest}
+        end)
+
+      # Rounded: it stays outside the arrival tolerance, and inside the blend
+      # radius it was given. Cutting the corner entirely would be a different
+      # bug from not blending at all, and this catches both.
+      assert closest > 1.0e-3, "settled on the corner instead of rounding it"
+      assert closest < 0.011, "rounded #{Float.round(closest * 1000, 2)}mm wide of a 10mm blend"
+
+      # And kept moving. The point of a blend is that the arm does not stop in
+      # the corner, so a speed anywhere near zero there means it did.
+      assert slowest > 0.02,
+             "slowed to #{Float.round(slowest * 1000, 1)}mm/s in a corner it was told to round"
+    end
+
+    test "a blend with nothing to blend into settles on the point", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      target = %ExMove.Frame{from | z: from.z + 0.04}
+
+      :ok =
+        CartesianStream.move_linear(chain, target,
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05,
+          blend: 0.01
+        )
+
+      run(ctx, 200, 3.0)
+
+      # Rounding a corner into nothing is just stopping short, and the operator
+      # asked to end up on the point.
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+      assert_in_delta tcp(chain).z, target.z, 1.0e-3
+    end
+
+    test "releasing throws the queue away", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+
+      :ok =
+        CartesianStream.move_linear(chain, %ExMove.Frame{from | z: from.z + 0.04},
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05
+        )
+
+      :ok = CartesianStream.move_linear(chain, %ExMove.Frame{from | z: from.z + 0.08}, feedrate: 0.05)
+
+      :ok = CartesianStream.release(chain.name)
+
+      assert CartesianStream.whereis(chain.name) == nil
+      assert CartesianStream.queued(chain.name) == nil
+    end
+  end
+
+  describe "move_arc" do
+    test "goes round, not across", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+
+      # A quarter circle in the YZ plane: out in Z, round through a via point
+      # that is off the straight line, and back.
+      via = %ExMove.Frame{from | y: from.y - 0.028, z: from.z + 0.028}
+      finish = %ExMove.Frame{from | y: from.y - 0.04}
+
+      :ok = CartesianStream.move_arc(chain, via, finish, clock: :external, hz: 200, feedrate: 0.05)
+
+      farthest =
+        Enum.reduce(1..800, 0.0, fn _i, farthest ->
+          step(ctx, 200)
+          max(farthest, tcp(chain).z - from.z)
+        end)
+
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+
+      arrived = tcp(chain)
+      assert_in_delta arrived.y, finish.y, 2.0e-3
+      assert_in_delta arrived.z, finish.z, 2.0e-3
+
+      # A straight line between the endpoints never leaves z. Bulging out to the
+      # via point is the entire difference between an arc and a linear move, and
+      # a `move_arc` that quietly went straight would pass every other assertion
+      # in this test.
+      assert farthest > 0.02,
+             "only bulged #{Float.round(farthest * 1000, 1)}mm — that is a straight line"
+    end
+
+    test "stays on the circle rather than merely hitting the three points", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+      via = %ExMove.Frame{from | y: from.y - 0.028, z: from.z + 0.028}
+      finish = %ExMove.Frame{from | y: from.y - 0.04}
+
+      # The circle through the three points, worked out here independently of
+      # the stream: centre and radius in the YZ plane.
+      {cy, cz, radius} = circle_through({from.y, from.z}, {via.y, via.z}, {finish.y, finish.z})
+
+      :ok = CartesianStream.move_arc(chain, via, finish, clock: :external, hz: 200, feedrate: 0.05)
+
+      worst =
+        Enum.reduce(1..800, 0.0, fn _i, worst ->
+          step(ctx, 200)
+          p = tcp(chain)
+          r = :math.sqrt(:math.pow(p.y - cy, 2) + :math.pow(p.z - cz, 2))
+          max(worst, abs(r - radius))
+        end)
+
+      assert worst < 0.002,
+             "left the circle by #{Float.round(worst * 1000, 2)}mm"
+    end
+
+    test "three points that are not a circle are refused", ctx do
+      %{chain: chain} = ctx
+
+      from = tcp(chain)
+
+      # Collinear: the via point sits on the straight line between the ends. An
+      # arc command that quietly became a straight line would be a program doing
+      # something other than what it says.
+      via = %ExMove.Frame{from | z: from.z + 0.02}
+      finish = %ExMove.Frame{from | z: from.z + 0.04}
+
+      :ok = CartesianStream.move_arc(chain, via, finish, clock: :external, hz: 200, feedrate: 0.05)
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == {:refused, :not_an_arc}
     end
   end
 
@@ -720,6 +937,23 @@ defmodule ExMove.CartesianStreamTest do
 
   defp distance(a, b) do
     :math.sqrt(:math.pow(b.x - a.x, 2) + :math.pow(b.y - a.y, 2) + :math.pow(b.z - a.z, 2))
+  end
+
+  # Centre and radius of the circle through three points in a plane. Written out
+  # here rather than reused from the stream, because a test that checks a circle
+  # with the same code that drew it checks nothing.
+  defp circle_through({ax, ay}, {bx, by}, {cx, cy}) do
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+
+    ux =
+      ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) +
+         (cx * cx + cy * cy) * (ay - by)) / d
+
+    uy =
+      ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) +
+         (cx * cx + cy * cy) * (bx - ax)) / d
+
+    {ux, uy, :math.sqrt(:math.pow(ax - ux, 2) + :math.pow(ay - uy, 2))}
   end
 
   defp wait_for_enabled(axis_ids) do

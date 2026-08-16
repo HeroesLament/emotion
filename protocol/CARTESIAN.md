@@ -422,19 +422,68 @@ described as one following a command. The internal clock stops ticking on
 arrival so it never saw this; an external one keeps being told to tick, which is
 what the tests use and what a fieldbus does.
 
-### No queue, and therefore no blending
+### The queue, and blending
 
-A second move replaces the first rather than following it. That is the honest
-behaviour for a build with no queue: the alternative is two commands silently
-reordering.
+Moves queue. A second one runs after the first rather than replacing it — a
+controller that dropped the move it was running whenever a new one arrived would
+make a two-line program depend on how fast the client sent it.
 
-Termination and blending — the FINE / CNT100 distinction every teach pendant
-shows per line, whether a move settles on its point or rounds through it into the
-next — need that queue, and the queue is where programs begin. Separate document,
-still.
+A **jog clears the queue**, and that is the one asymmetry worth stating. An
+operator taking hold of the arm has taken hold of it; queued moves firing
+afterwards because nobody thought to cancel them is how a machine surprises
+somebody.
 
-`move_arc` is the same machinery with `ExMove.Path.arc/6` supplying the error
-instead of a straight line, and is small once somebody wants it.
+Termination is FINE by default — settle on the point — and a blend radius makes
+it CNT: within that radius the move gives way to the next one and the corner is
+rounded instead of stopped in. The mechanism is two lines: `finished?` returns
+true early, and `advance` starts the next motion **on the same tick**. That
+second part is what makes a blend a blend, because the arm never spends a tick
+with nothing to do and so never decelerates into the corner it was told to round.
+
+A blend with nothing queued behind it is ignored and the move settles on its
+point. Rounding a corner into nothing is just stopping short.
+
+Two distances, and they are different on purpose. Blending asks how much *path*
+is left, because that is what a corner is made of. Arrival asks how far the tool
+is from the *point*, because that is what arriving means. On a straight move they
+are the same number; on an arc they are not, and using path length for arrival
+makes the tolerance depend on the radius — a tight arc reaching it comfortably
+and a wide one never quite getting there. That was a real bug and it is why they
+are two calls.
+
+### `move_arc`
+
+Three points define the circle: where the arm is when the move starts, a via
+point, and the end. That is the form every teach pendant uses and the only one
+that can be taught by driving the arm somewhere three times. Three points that do
+not define a circle — collinear, or two of them coincident — are refused rather
+than approximated, because an arc that quietly becomes a straight line is a
+program doing something other than what it says.
+
+The waypoint is one tick ahead along the circle, measured from where the arm
+**actually is**. So an arm slowed by a rate ceiling falls behind *along the path*
+rather than cutting across it: the waypoint follows the arm, the arm does not
+chase a clock.
+
+**The geometry is computed once**, when the motion becomes current, and kept.
+This is the one place in this module where "re-solve from the live pose every
+tick" is wrong, and it is wrong loudly: the first of the three points is where
+the arm is, so recomputing each tick changes the circle under the arm as it moves
+along it. The arm runs to the via point, the three points go degenerate there,
+and it stops dead mid-arc and jitters. Measured exactly that, before the fix.
+Live feedback belongs in the error term, not in the definition of the path.
+
+Orientation is driven toward the end orientation, paced by the remaining arc
+length so it arrives with the position. It is not slerped along the path — the
+tool ends up right and gets there smoothly, but a specific orientation partway
+round is not something this promises, which is why the via point takes a position
+and no rotation.
+
+### Still open
+
+Program execution. A queue that a client fills one call at a time is not a
+program; it has no names, no branches, no way to be stored, edited or resumed.
+That is a separate document and it is the next one.
 
 ## 9. Studio
 
@@ -494,6 +543,7 @@ caught what we shipped:
 7. ~~Cartesian speed limit, then the mode interlock~~ — both done. Keying the
    speed limit to the mode rather than leaving it always-on is the one piece
    left, and it is small.
-8. ~~`move_linear`~~ — done, along with keying the tool speed limit to the mode.
-   `move_arc` and the queue remain; the queue is a separate document.
+8. ~~`move_linear` / `move_arc` and the queue~~ — done, along with FINE and
+   blended termination and keying the tool speed limit to the mode. Programs —
+   names, branches, storage — are the separate document.
 9. Studio: Cartesian pendant, then the gizmo.

@@ -132,7 +132,7 @@ defmodule ExMove.CartesianStream do
     :chain,
     :frame,
     :twist,
-    :goal,
+    :motion,
     :hz,
     :tick_ms,
     :max_joint_velocity,
@@ -141,6 +141,7 @@ defmodule ExMove.CartesianStream do
     :speed_floor,
     :clock,
     :timer,
+    queue: [],
     status: :idle
   ]
 
@@ -209,34 +210,84 @@ defmodule ExMove.CartesianStream do
     * everything `hold/3` takes.
   """
   def move_linear(%Chain{} = chain, %Frame{} = target, opts \\ []) do
-    goal = %{
+    enqueue(chain, motion(:linear, target, opts), opts)
+  end
+
+  @doc """
+  Move the tool centre point through `via` to `target` along a circular arc.
+
+  Three points define a circle: where the arm is now, the via point, and the end.
+  That is the form every teach pendant uses, and it is the one that can be taught
+  by driving the arm to three places rather than by working out a centre.
+
+  Three points that do not define a circle — collinear, or two of them the same —
+  are refused rather than approximated. An arc command that quietly becomes a
+  straight line is a program that does something different from what it says.
+
+  Orientation is driven toward the end orientation and synchronised with the
+  remaining arc length, so it arrives with the position. It is not slerped along
+  the path: the tool ends up right and gets there smoothly, but a specific
+  orientation partway round is not something this promises.
+  """
+  def move_arc(%Chain{} = chain, %Frame{} = via, %Frame{} = target, opts \\ []) do
+    motion =
+      :arc
+      |> motion(target, opts)
+      |> Map.put(:via, {via.x, via.y, via.z})
+
+    enqueue(chain, motion, opts)
+  end
+
+  defp motion(kind, %Frame{} = target, opts) do
+    %{
+      kind: kind,
+      via: nil,
+      arc: nil,
       transform: FK.frame_transform(target),
       feedrate: Keyword.get(opts, :feedrate, @default_max_tool_velocity),
       angular_feedrate: Keyword.get(opts, :angular_feedrate, @default_angular_feedrate),
       position_tolerance: Keyword.get(opts, :position_tolerance, @default_position_tolerance),
       orientation_tolerance:
-        Keyword.get(opts, :orientation_tolerance, @default_orientation_tolerance)
+        Keyword.get(opts, :orientation_tolerance, @default_orientation_tolerance),
+      # `nil` is FINE: settle on the point. A number is the radius within which
+      # this move gives way to the next one, which rounds the corner instead of
+      # stopping in it. Every teach pendant calls these FINE and CNT.
+      blend: Keyword.get(opts, :blend)
     }
+  end
 
-    # Replaces whatever the arm was doing rather than queueing behind it. There
-    # is no motion queue yet — that is where programs begin and is a separate
-    # document — so the honest behaviour is the one that cannot silently reorder
-    # two commands.
-    release(chain.name)
+  # Appended, not substituted. A controller that dropped the move it was running
+  # whenever a new one arrived would make a two-line program depend on how fast
+  # the client sent it.
+  defp enqueue(chain, motion, opts) do
+    case whereis(chain.name) do
+      nil ->
+        opts =
+          opts
+          |> Keyword.put(:chain, chain)
+          |> Keyword.put(:twist, List.duplicate(0.0, 6))
+          |> Keyword.put(:motion, motion)
 
-    opts =
-      opts
-      |> Keyword.put(:chain, chain)
-      |> Keyword.put(:twist, List.duplicate(0.0, 6))
-      |> Keyword.put(:goal, goal)
+        case DynamicSupervisor.start_child(ExMove.StreamSupervisor, {__MODULE__, opts}) do
+          {:ok, _pid} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
 
-    case DynamicSupervisor.start_child(ExMove.StreamSupervisor, {__MODULE__, opts}) do
-      {:ok, _pid} -> :ok
-      {:error, reason} -> {:error, reason}
+      pid ->
+        GenServer.call(pid, {:enqueue, motion})
+    end
+  end
+
+  @doc "How many motions are waiting behind the one running, or nil if no stream."
+  def queued(name) do
+    case whereis(name) do
+      nil -> nil
+      pid -> GenServer.call(pid, :queued)
     end
   end
 
   @doc """
+  Stop the stream for `arm`, commanding zero on the way out.  @doc \"""
   Stop the stream for `arm`, commanding zero on the way out.
 
   The explicit zero is what makes a released button feel attached to the machine.
@@ -367,7 +418,8 @@ defmodule ExMove.CartesianStream do
         chain: chain,
         frame: Keyword.get(opts, :frame, :base),
         twist: Keyword.fetch!(opts, :twist),
-        goal: Keyword.get(opts, :goal),
+        motion: Keyword.get(opts, :motion),
+        queue: Keyword.get(opts, :queue, []),
         hz: hz,
         tick_ms: max(round(1000 / hz), 1),
         max_joint_velocity: Keyword.get(opts, :max_joint_velocity, @default_max_joint_velocity),
@@ -391,7 +443,18 @@ defmodule ExMove.CartesianStream do
     # A refresh un-finishes the stream. Whoever is asserting now is asking for
     # motion, and leaving `{:done, :reached}` in place would leave the guard
     # above swallowing every tick of it.
-    {:noreply, %{state | frame: frame, twist: twist, goal: nil, status: status_after_refresh(state)}}
+    # A jog clears the queue as well as the current motion. An operator taking
+    # hold of the arm has taken hold of it; queued moves firing afterwards
+    # because nobody thought to cancel them is how a machine surprises somebody.
+    {:noreply,
+     %{
+       state
+       | frame: frame,
+         twist: twist,
+         motion: nil,
+         queue: [],
+         status: status_after_refresh(state)
+     }}
   end
 
   defp status_after_refresh(%{status: {:done, _reason}}), do: :idle
@@ -410,6 +473,21 @@ defmodule ExMove.CartesianStream do
   def handle_call(:intent, _from, state), do: {:reply, state.twist, state}
 
   def handle_call(:status, _from, state), do: {:reply, state.status, state}
+
+  def handle_call(:queued, _from, state), do: {:reply, length(state.queue), state}
+
+  def handle_call({:enqueue, motion}, _from, state) do
+    state =
+      case state.motion do
+        nil -> %{state | motion: motion, status: :idle}
+        _running -> %{state | queue: state.queue ++ [motion]}
+      end
+
+    # A finished stream that is handed another move starts ticking again. It
+    # stopped its timer on arrival, so without this the queue would fill up and
+    # nothing would ever look at it.
+    {:reply, :ok, restart_if_idle(state)}
+  end
 
   @impl true
   def handle_info(:tick, state) do
@@ -447,11 +525,11 @@ defmodule ExMove.CartesianStream do
   defp step(state, dt) do
     with {:ok, positions} <- joint_positions(state.chain),
          js = %JointState{positions: positions},
+         {:ok, state} <- adopt(state, js),
          {:ok, twist} <- commanded_twist(state, js, dt) do
       case twist do
         :arrived ->
-          write(state.chain, List.duplicate(0.0, length(state.chain.axis_ids)))
-          {%{state | goal: nil, status: {:done, :reached}}, {:ok, :reached}}
+          advance(state, js, dt)
 
         twist ->
           case IK.solve_velocity(state.chain, js, twist) do
@@ -467,40 +545,240 @@ defmodule ExMove.CartesianStream do
     end
   end
 
+  # One motion is finished. Either the next one starts on this same tick, or
+  # there is no next one and the arm stops.
+  #
+  # Starting the next one *here* rather than on the following tick is what makes
+  # a blend a blend: the arm never spends a tick with nothing to do, so it never
+  # decelerates into the corner it is meant to round.
+  defp advance(%{queue: []} = state, _js, _dt) do
+    write(state.chain, List.duplicate(0.0, length(state.chain.axis_ids)))
+    {%{state | motion: nil, status: {:done, :reached}}, {:ok, :reached}}
+  end
+
+  defp advance(%{queue: [next | rest]} = state, _js, dt) do
+    step(%{state | motion: next, queue: rest}, dt)
+  end
+
   # Where the twist comes from. A held jog has one handed to it; a move works one
   # out from how far it still has to go.
-  defp commanded_twist(%{goal: nil} = state, js, _dt) do
+  defp commanded_twist(%{motion: nil} = state, js, _dt) do
     in_base(state.frame, state.chain, js, state.twist)
   end
 
-  defp commanded_twist(%{goal: goal} = state, js, dt) do
+  defp commanded_twist(%{motion: motion} = state, js, dt) do
     current = FK.solve_transform(state.chain, js)
 
-    {ex, ey, ez} = position_error(current, goal.transform)
-    {ax, ay, az} = orientation_error(current, goal.transform)
+    target = waypoint(motion, current, dt)
+
+    {ex, ey, ez} = position_error(current, target)
+    {ax, ay, az} = orientation_error(current, motion.transform)
 
     distance = norm(ex, ey, ez)
     angle = norm(ax, ay, az)
+    remaining = remaining_distance(motion, current)
+    to_target = norm_of(position_error(current, motion.transform))
 
-    if distance < goal.position_tolerance and angle < goal.orientation_tolerance do
+    if finished?(motion, remaining, to_target, angle, state.queue) do
       {:ok, :arrived}
     else
       # Translation and rotation are synchronised: whichever needs longer sets
-      # the pace and both arrive together. A move that got there and then turned
-      # would be two moves wearing one command's name.
+      # the pace and both arrive together. A move that got there and then
+      # turned would be two moves wearing one command's name.
       #
-      # `dt` is the floor, and it is what stops the arm overshooting: within one
-      # tick of the target the remaining error is covered in exactly that tick
-      # rather than at a feedrate that would carry it past. No separate
+      # `dt` is the floor, and it is what stops the arm overshooting: within
+      # one tick of the target the remaining error is covered in exactly that
+      # tick rather than at a feedrate that would carry it past. No separate
       # deceleration ramp, and none wanted — a ramp is a fact about the drives,
       # which have one.
+      #
+      # The angular term is paced by the *remaining path*, not by the distance
+      # to this tick's waypoint, which on an arc is one tick long and would
+      # spin the wrist at the rate needed to finish inside it.
       seconds =
-        [distance / goal.feedrate, angle / goal.angular_feedrate, dt]
+        [
+          distance / motion.feedrate,
+          remaining / motion.feedrate,
+          angle / motion.angular_feedrate,
+          dt
+        ]
         |> Enum.max()
 
-      {:ok, [ex / seconds, ey / seconds, ez / seconds, ax / seconds, ay / seconds, az / seconds]}
+      linear = max(distance / motion.feedrate, dt)
+
+      {:ok, [ex / linear, ey / linear, ez / linear, ax / seconds, ay / seconds, az / seconds]}
     end
   end
+
+  # A move is over when it has arrived. A move with a blend radius is over
+  # earlier — when it is within that radius and there is something to blend into.
+  #
+  # Two different distances, and they are different on purpose. Blending is about
+  # how much *path* is left, because that is what the corner is made of. Arrival
+  # is about how far the tool is from the *point*, because that is what arriving
+  # means. On a straight move they are the same number; on an arc they are not,
+  # and using the path length for arrival makes the tolerance depend on the
+  # radius — a small arc reaching it comfortably and a large one never quite
+  # getting there.
+  #
+  # No next motion means no blend, whatever was asked for: rounding a corner into
+  # nothing is just stopping short, and the operator asked to end up on the point.
+  defp finished?(motion, remaining, to_target, angle, queue) do
+    cond do
+      motion.blend != nil and queue != [] and remaining <= motion.blend -> true
+      to_target < motion.position_tolerance and angle < motion.orientation_tolerance -> true
+      true -> false
+    end
+  end
+
+  # ── Where the arm is being asked to be, this tick ─────────────────────────
+
+  # A straight move aims at its endpoint the whole way. An arc aims one tick
+  # ahead along the circle, measured from where the arm actually is — so an arm
+  # that has been slowed by a rate ceiling falls behind along the path rather
+  # than cutting across it. The waypoint follows the arm; the arm does not chase
+  # a clock.
+  defp waypoint(%{kind: :linear} = motion, _current, _dt), do: motion.transform
+
+  defp waypoint(%{kind: :arc, arc: arc} = motion, current, dt) do
+    theta = arc_angle(arc, Math.translation_of(current))
+    step = motion.feedrate * dt / arc.radius
+
+    ahead =
+      if arc.sweep >= 0.0 do
+        min(theta + step, arc.sweep)
+      else
+        max(theta - step, arc.sweep)
+      end
+
+    arc_point(arc, ahead)
+  end
+
+  defp remaining_distance(%{kind: :linear} = motion, current) do
+    {ex, ey, ez} = position_error(current, motion.transform)
+    norm(ex, ey, ez)
+  end
+
+  defp remaining_distance(%{kind: :arc, arc: arc}, current) do
+    theta = arc_angle(arc, Math.translation_of(current))
+    abs(arc.sweep - theta) * arc.radius
+  end
+
+  # ── Circles through three points ──────────────────────────────────────────
+
+  # The arc's geometry is worked out **once**, when the motion becomes the
+  # current one, and kept.
+  #
+  # Once, because the first of its three points is where the arm is — and if that
+  # is re-read every tick the circle changes under the arm as it moves along it.
+  # Which is not a subtle failure: the arm runs to the via point, the three
+  # points become degenerate there, and it stops dead in the middle of the arc
+  # and jitters. Written down because "recompute from the live pose every tick"
+  # is the right instinct everywhere else in this module and is wrong here. Live
+  # feedback belongs in the error term, not in the definition of the path.
+  #
+  # And when the motion becomes current rather than when it was queued: where the
+  # arm is when a queued move finally starts is not where it was when somebody
+  # sent it.
+  defp adopt(%{motion: %{kind: :arc, arc: nil} = motion} = state, js) do
+    current = FK.solve_transform(state.chain, js)
+    start = Math.translation_of(current)
+    finish = Math.translation_of(motion.transform)
+
+    case circle(start, motion.via, finish) do
+      {:ok, arc} -> {:ok, %{state | motion: %{motion | arc: arc}}}
+      :degenerate -> {:error, :not_an_arc}
+    end
+  end
+
+  defp adopt(state, _js), do: {:ok, state}
+
+  # Centre, normal and sweep from three points, by the standard construction:
+  # the centre is where the perpendicular bisectors of two chords meet, solved in
+  # the plane the three points span.
+  defp circle({ax, ay, az} = a, {bx, by, bz} = b, {cx, cy, cz} = c) do
+    u = {bx - ax, by - ay, bz - az}
+    v = {cx - ax, cy - ay, cz - az}
+
+    w = cross(u, v)
+    w_len = norm_of(w)
+
+    # Collinear, or two points on top of each other. Both mean there is no circle
+    # through them, and inventing one would be worse than refusing.
+    if w_len < 1.0e-9 do
+      :degenerate
+    else
+      normal = scale_vector(w, 1.0 / w_len)
+
+      uu = dot(u, u)
+      vv = dot(v, v)
+
+      # centre = a + (uu·(v×w) + vv·(w×u)) / (2|w|²)
+      numerator = add(scale_vector(cross(v, w), uu), scale_vector(cross(w, u), vv))
+      centre = add(a, scale_vector(numerator, 1.0 / (2.0 * dot(w, w))))
+
+      radius = norm_of(subtract(a, centre))
+
+      x_axis = scale_vector(subtract(a, centre), 1.0 / radius)
+      y_axis = cross(normal, x_axis)
+
+      arc = %{centre: centre, normal: normal, radius: radius, x_axis: x_axis, y_axis: y_axis}
+
+      # The sweep is the angle to the end point, taken the way round that passes
+      # through the via point. That is the whole reason a via point is given
+      # rather than just a centre: it says which way round.
+      via_angle = raw_angle(arc, b)
+      end_angle = raw_angle(arc, c)
+
+      sweep =
+        if via_angle <= end_angle do
+          end_angle
+        else
+          end_angle - 2.0 * :math.pi()
+        end
+
+      {:ok, Map.put(arc, :sweep, sweep)}
+    end
+  end
+
+  # Angle of a point about the arc's centre, in the arc's own plane, measured
+  # from the start point and always in [0, 2π).
+  defp raw_angle(arc, point) do
+    d = subtract(point, arc.centre)
+    angle = :math.atan2(dot(d, arc.y_axis), dot(d, arc.x_axis))
+
+    if angle < 0.0, do: angle + 2.0 * :math.pi(), else: angle
+  end
+
+  # The same, but continuous across the start rather than wrapping — an arm
+  # sitting a hair before the start point should read as "not yet begun", not as
+  # "nearly all the way round".
+  defp arc_angle(arc, point) do
+    angle = raw_angle(arc, point)
+
+    cond do
+      arc.sweep >= 0.0 and angle > arc.sweep + :math.pi() -> angle - 2.0 * :math.pi()
+      arc.sweep < 0.0 and angle > 0.0 -> angle - 2.0 * :math.pi()
+      true -> angle
+    end
+  end
+
+  # A point on the arc, as a transform carrying the end orientation. Only the
+  # translation is used — the rotation is driven separately, toward the end pose
+  # and paced by the remaining arc length.
+  defp arc_point(arc, theta) do
+    {x, y, z} =
+      arc.centre
+      |> add(scale_vector(arc.x_axis, arc.radius * :math.cos(theta)))
+      |> add(scale_vector(arc.y_axis, arc.radius * :math.sin(theta)))
+
+    Math.translation(x, y, z)
+  end
+
+  defp dot({ax, ay, az}, {bx, by, bz}), do: ax * bx + ay * by + az * bz
+  defp subtract({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
+  defp scale_vector({x, y, z}, k), do: {x * k, y * k, z * k}
+  defp norm_of({x, y, z}), do: norm(x, y, z)
 
   defp position_error(current, target) do
     {cx, cy, cz} = Math.translation_of(current)
@@ -741,6 +1019,16 @@ defmodule ExMove.CartesianStream do
   catch
     :exit, _reason -> {:error, :not_enabled}
   end
+
+  # A stream that stopped its timer on arrival needs it back when work arrives.
+  # Only ever from `{:done, _}`: restarting a timer that is already running would
+  # double the tick rate, which is the sort of bug that reads as "the arm is
+  # twice as fast now" and takes an afternoon.
+  defp restart_if_idle(%{status: {:done, _reason}} = state) do
+    schedule(%{state | status: :idle})
+  end
+
+  defp restart_if_idle(state), do: state
 
   defp schedule(%{clock: :external} = state), do: state
 
