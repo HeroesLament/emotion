@@ -77,15 +77,31 @@ defmodule ExProto.Source do
 
   `{:error, :rejected}` therefore means the command could not even be started,
   not that it failed.
+
+  ## Commands that answer
+
+  Most commands have nothing to say beyond "accepted" — an enable is observed
+  on the axis's `state`, not returned here, because the drive has not finished
+  agreeing yet. A few have an answer that exists the moment the call returns
+  and nowhere else: listing what is stored, or reporting whether a teach
+  created a row or overwrote one. Those return `{:ok, map}`, and the map is
+  merged into the acceptance under `result` against the method's declared
+  output fields.
+
+  This is not a general escape hatch for synchronous replies. A command whose
+  outcome is a machine doing something still reports through observable state,
+  because that is the only report that stays true after the call has returned.
   """
-  @callback call(node_id(), args :: map(), term()) :: :ok | {:error, reason()}
+  @callback call(node_id(), args :: map(), term()) ::
+              :ok | {:ok, %{optional(String.t()) => term()}} | {:error, reason()}
 
   @optional_callbacks read_many: 2, call: 3
 
   @doc """
   Invokes a method through a source, or reports that it has none.
   """
-  @spec call(module(), node_id(), map(), term()) :: :ok | {:error, reason()}
+  @spec call(module(), node_id(), map(), term()) ::
+          :ok | {:ok, %{optional(String.t()) => term()}} | {:error, reason()}
   def call(module, node_id, args, arg) do
     if exports?(module, :call, 3) do
       module.call(node_id, args, arg)

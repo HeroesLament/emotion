@@ -397,9 +397,23 @@ defmodule ExProto.Nodes do
     Jog.release(node.parent, session.jog)
 
     case Source.call(module, node_id, args, arg) do
-      :ok -> {:ok, %{"nodeId" => node_id, "accepted" => true, "async" => node.async}}
-      {:error, reason} -> call_error(reason)
+      :ok ->
+        {:ok, acceptance(node, node_id)}
+
+      # A command with an answer that exists now and nowhere else — what is
+      # stored, or whether a teach created a row or overwrote one. Merged into
+      # the acceptance rather than replacing it, so a client that only checks
+      # `accepted` reads this the same as any other call.
+      {:ok, result} when is_map(result) ->
+        {:ok, Map.put(acceptance(node, node_id), "result", result)}
+
+      {:error, reason} ->
+        call_error(reason)
     end
+  end
+
+  defp acceptance(node, node_id) do
+    %{"nodeId" => node_id, "accepted" => true, "async" => node.async}
   end
 
   # A held command. The hold is taken on the node's parent rather than on the

@@ -1,6 +1,7 @@
 defmodule ExProto.ModeTest do
   use ExUnit.Case, async: false
 
+  alias ExMove.CartesianStream
   alias ExProto.{Jog, Mode}
   alias ExProto.Source.Exdrive, as: Source
 
@@ -77,6 +78,14 @@ defmodule ExProto.ModeTest do
     end
 
     test "a Cartesian jog is refused before a stream is ever started", %{arg: arg} do
+      # The precondition is established rather than assumed, and that is the
+      # whole lesson of this line. This asserts a *negative* — that the refusal
+      # started nothing — so it passed only for as long as no other test in the
+      # VM had ever moved the arm. The moment one did, by starting the arm's
+      # real drives so that a move could succeed, this failed while nothing it
+      # tests had changed.
+      CartesianStream.release(ExMo.Schema.Registry.arm_chain().name)
+
       :ok = Mode.select(:idle, TestMode)
 
       assert {:error, {:wrong_mode, :idle}} =
@@ -85,7 +94,7 @@ defmodule ExProto.ModeTest do
       # The refusal has to come before the stream, not after. A stream started
       # and then told it may not move is a process holding an arm it is not
       # allowed to hold.
-      assert ExMove.CartesianStream.whereis(ExMo.Schema.Registry.arm_chain().name) == nil
+      assert CartesianStream.whereis(ExMo.Schema.Registry.arm_chain().name) == nil
     end
 
     test "nothing moves on a refused jog", %{arg: arg} do

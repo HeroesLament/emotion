@@ -145,12 +145,20 @@ outliving its argument.
     treated as base when the name is not there.
 
 A frame is six numbers and a name, which made this the smallest piece of work in
-this document and the one the rest of it needs. What is built is the table, the
-resolver and the `frame` argument on every Cartesian motion. What is **not**
-built is the projection: there are no model nodes under `frames.<name>` and no
-method that teaches one over the protocol, so today a frame is written by a
-process with the database open. That is the next piece, and it is where
-`write_configuration` starts guarding something.
+this document and the one the rest of it needs. Built: the table, the resolver,
+the `frame` argument on every Cartesian motion, and the projection — `cell` in
+the Information Model, with `teach_frame`, `forget_frame` and `list_frames`
+behind `write_configuration`.
+
+The projection is **not** a node per frame, and the reason is worth recording
+because the earlier draft of this section assumed one. A model node per stored
+row means the address space changes shape when somebody teaches a fixture. OPC
+UA can express that; this build's model is compiled once at boot and cannot,
+and making it dynamic to publish six numbers would be a large change bought
+cheaply nowhere else. So listing is a method that returns rows, and the node
+tree stays a fact about the build rather than about the database. The one node
+that *is* published is `cell.tool`, because what is fitted is machine state
+rather than a row somebody might add.
 
 Re-teaching a frame must move every point that references it and nothing else.
 That single property is what makes frames worth having, and it is the first
@@ -561,7 +569,7 @@ worth having:
 2. ~~**Tools**~~, in the same stroke: the same six numbers, and the chain's
    compile-time `tool` field moved into a row the stream reads. Both landed in
    the controller's database, which is `exstore` now rather than `exauth`.
-   Neither is on the protocol yet — see §1.
+   Both are on the protocol, under `cell`.
 3. **Points**, with the frame reference, the tool reference and the taught joint
    solution.
 4. **The statement-kind registry**, with the built-in kinds registered through

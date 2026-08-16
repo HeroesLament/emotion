@@ -51,10 +51,25 @@ defmodule ExProto.Controller do
       endpoint_opts =
         opts
         |> Keyword.take([:port, :scheme, :tls, :mode_position])
-        |> Keyword.merge(table: table, source: {Source.Exdrive, [mode: mode]}, mode: mode)
+        |> Keyword.merge(table: table, source: source(mode), mode: mode)
 
       Endpoint.start_link(endpoint_opts)
     end
+  end
+
+  # Drives and stored geometry are different kinds of thing with different
+  # failure modes, so they are different sources and the router is explicit.
+  # `state.*` stays with the drives because it is derived from them — whether
+  # anything is faulted is a question about the axes.
+  defp source(mode) do
+    drives = {Source.Exdrive, [mode: mode]}
+
+    {Source.Composite,
+     %{
+       "axes" => drives,
+       "state" => drives,
+       "cell" => {Source.Cell, []}
+     }}
   end
 
   @doc "The projected node table this controller serves."

@@ -259,6 +259,15 @@ defmodule Mix.Tasks.Exmo.Rpc do
         # machine that takes time to obey.
         Mix.shell().info("  #{result["nodeId"]} accepted")
 
+        # A few commands answer immediately — what is stored, or whether a
+        # teach created a row or overwrote one. Printed as JSON rather than
+        # inspected: this is what came off the wire, and a client author
+        # reading this output should see the shape their own code will get.
+        case result["result"] do
+          nil -> :ok
+          payload -> Mix.shell().info("  " <> IO.iodata_to_binary(:json.encode(payload)))
+        end
+
         if result["async"] do
           Mix.shell().info("  watch the axis state for the outcome: mix exmo.rpc watch <axis>.state")
         end

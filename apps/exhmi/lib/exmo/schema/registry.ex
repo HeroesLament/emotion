@@ -7,7 +7,18 @@ defmodule ExMo.Schema.Registry do
   printer/drive fragments, etc. For now it's explicit and inspectable.
   """
 
-  alias ExMo.Schema.{Argument, Model, Object, Property, Enum, Method, FromAxis, FromBehavior}
+  alias ExMo.Schema.{
+    Argument,
+    Model,
+    Object,
+    Property,
+    Enum,
+    Method,
+    ResultField,
+    StructType,
+    FromAxis,
+    FromBehavior
+  }
   alias ExMo.Behaviors.K1C.RemovePreviousPrint
 
   @doc "Returns the uncompiled root model with all registered fragments."
@@ -39,6 +50,43 @@ defmodule ExMo.Schema.Registry do
             "but not accepting motion; `enabled` is live.",
         values: ExMo.Schema.FromAxis.states()
       },
+      "type.stored_frame" => %StructType{
+        id: "type.stored_frame",
+        name: "StoredFrame",
+        description:
+          "A user frame as stored: six numbers relative to `parent`, or to the " <>
+            "arm's base when there is none.",
+        fields: stored_pose_fields() ++
+          [
+            %ResultField{
+              name: "parent",
+              type: :string,
+              description: "The frame this one is relative to, or empty"
+            },
+            %ResultField{
+              name: "mutable",
+              type: :boolean,
+              description:
+                "Whether a running program may write this frame. Taught-constant " <>
+                  "against runtime-mutable is the axis that matters — a vision " <>
+                  "offset writes a mutable frame at line rate; a taught fixture " <>
+                  "origin is configuration and is not writable by a program at all."
+            }
+          ]
+      },
+      "type.stored_tool" => %StructType{
+        id: "type.stored_tool",
+        name: "StoredTool",
+        description: "An end-of-arm tool as stored: the flange-to-TCP transform.",
+        fields: stored_pose_fields() ++
+          [
+            %ResultField{
+              name: "fitted",
+              type: :boolean,
+              description: "Whether this tool is the one currently on the flange"
+            }
+          ]
+      },
       "type.behavior_phase" => %Enum{
         id: "type.behavior_phase",
         name: "BehaviorPhase",
@@ -62,6 +110,20 @@ defmodule ExMo.Schema.Registry do
     }
   end
 
+  defp stored_pose_fields do
+    [%ResultField{name: "name", type: :string, description: "The stored name"}] ++
+      for {axis, label} <- [
+            {"x", "Position along X, metres"},
+            {"y", "Position along Y, metres"},
+            {"z", "Position along Z, metres"},
+            {"rx", "Roll about X, radians"},
+            {"ry", "Pitch about Y, radians"},
+            {"rz", "Yaw about Z, radians"}
+          ] do
+        %ResultField{name: axis, type: :double, description: label}
+      end
+  end
+
   # ── Object tree ───────────────────────────────────────────────────────────
 
   defp root_object(rpp_catalog, rpp_runtime) do
@@ -71,6 +133,7 @@ defmodule ExMo.Schema.Registry do
       children: [
         axes_object(),
         behaviors_object(rpp_catalog, rpp_runtime),
+        cell_object(),
         printers_object(),
         state_object()
       ]
@@ -308,6 +371,246 @@ defmodule ExMo.Schema.Registry do
               "the acceptance."
         }
       ]
+    }
+  end
+
+
+  # ── The cell: stored geometry ─────────────────────────────────────────────
+
+  # Frames and tools are *configuration*, and configuration is the part of a
+  # controller an operator changes without a deploy. That is the whole reason
+  # they are rows rather than a field on a struct, and this object is where
+  # that becomes true from the outside as well.
+  #
+  # What is deliberately not here is a node per frame. A model node per stored
+  # row means the address space changes shape when someone teaches a fixture —
+  # which OPC UA can express and this build's compiled model cannot, since it is
+  # built once at boot. Listing is therefore a method that returns rows, and the
+  # node tree stays a fact about the build rather than about the database.
+  defp cell_object do
+    %Object{
+      id: "cell",
+      name: "Cell",
+      description:
+        "The geometry the controller stores rather than compiles: user frames, " <>
+          "end-of-arm tools, and which tool is fitted. Frames are named places " <>
+          "to teach in; re-teaching one moves everything taught in it. Tools " <>
+          "are the transform from the flange to the tool centre point, and the " <>
+          "fitted one is machine state that survives a power cycle.",
+      children: [
+        %Property{
+          id: "cell.tool",
+          name: "FittedTool",
+          description:
+            "The name of the tool currently fitted, or empty for a bare " <>
+              "flange. A bare flange is a real state, not a missing answer: it " <>
+              "is what the arm has after a changeover nobody finished, and the " <>
+              "tool centre point is then the flange itself. Read-only — fitting " <>
+              "is a changeover, which is a method, because it is something " <>
+              "somebody did to the machine rather than a value to be set.",
+          type: :string,
+          read_grant: :read_state
+        },
+        teach_frame(),
+        forget_frame(),
+        list_frames(),
+        teach_tool(),
+        list_tools(),
+        fit_tool(),
+        release_tool()
+      ]
+    }
+  end
+
+  # Six numbers and a name, which is the whole of a frame — and the same six
+  # arguments serve teaching a tool, so they are generated rather than typed
+  # twice and allowed to drift.
+  defp pose_arguments(what) do
+    for {axis, label, unit} <- [
+          {"x", "along X", "metres"},
+          {"y", "along Y", "metres"},
+          {"z", "along Z", "metres"},
+          {"rx", "roll about X", "radians"},
+          {"ry", "pitch about Y", "radians"},
+          {"rz", "yaw about Z", "radians"}
+        ] do
+      %Argument{
+        name: axis,
+        type: :double,
+        required: false,
+        default: 0.0,
+        description: "#{String.capitalize(label)} of #{what}, #{unit}. Omitted is zero."
+      }
+    end
+  end
+
+  defp teach_frame do
+    %Method{
+      id: "cell.teach_frame",
+      name: "TeachFrame",
+      description:
+        "Creates a user frame, or re-teaches one that exists. Re-teaching " <>
+          "moves everything taught in the frame and nothing else, which is the " <>
+          "property frames exist for — and it is why this is one method rather " <>
+          "than a create and an update: a fixture that was bumped is the same " <>
+          "fixture. `base` and `tool` are refused: the controller computes " <>
+          "those and a stored row must not be able to shadow one.",
+      async: false,
+      call_grant: :write_configuration,
+      input_args:
+        [
+          %Argument{
+            name: "name",
+            type: :string,
+            required: true,
+            description:
+              "Lowercase, starting with a letter. Case-sensitive names produce " <>
+                "two frames that print the same and are not the same, which is " <>
+                "a fault nobody finds by reading."
+          }
+        ] ++
+          pose_arguments("the frame's origin") ++
+          [
+            %Argument{
+              name: "parent",
+              type: :string,
+              required: false,
+              description:
+                "The frame this one is defined relative to — a jig on a table. " <>
+                  "Omitted, the frame is relative to the arm's base. Re-teaching " <>
+                  "the parent moves this frame with it. A cycle is refused."
+            }
+          ],
+      output_args: [
+        %ResultField{name: "name", type: :string, description: "The frame that was taught"},
+        %ResultField{
+          name: "created",
+          type: :boolean,
+          description: "True if the frame did not exist before this call"
+        }
+      ]
+    }
+  end
+
+  defp forget_frame do
+    %Method{
+      id: "cell.forget_frame",
+      name: "ForgetFrame",
+      description:
+        "Deletes a user frame. Refused while another frame is defined relative " <>
+          "to it, rather than orphaning the child — and, once points exist, " <>
+          "refused while anything is taught in it. A frame that can be deleted " <>
+          "out from under a taught path is a path that silently means somewhere " <>
+          "else.",
+      async: false,
+      call_grant: :write_configuration,
+      input_args: [
+        %Argument{name: "name", type: :string, required: true, description: "The frame to delete"}
+      ]
+    }
+  end
+
+  defp list_frames do
+    %Method{
+      id: "cell.list_frames",
+      name: "ListFrames",
+      description:
+        "Every stored frame: its name, its parent if it has one, and its six " <>
+          "numbers relative to that parent. A method rather than a node per " <>
+          "frame, because the node tree is built at boot and teaching a fixture " <>
+          "must not change the shape of the address space.",
+      async: false,
+      call_grant: :read_state,
+      output_args: [
+        %ResultField{
+          name: "frames",
+          type: {:array, {:ref, "type.stored_frame"}},
+          description: "Stored frames, by name"
+        }
+      ]
+    }
+  end
+
+  defp teach_tool do
+    %Method{
+      id: "cell.teach_tool",
+      name: "TeachTool",
+      description:
+        "Creates an end-of-arm tool, or re-teaches one that exists. The six " <>
+          "numbers are the transform from the flange to the tool centre point. " <>
+          "Teaching a tool is not fitting it: this describes a thing that " <>
+          "exists, and says nothing about what is bolted on right now.",
+      async: false,
+      call_grant: :write_configuration,
+      input_args:
+        [
+          %Argument{
+            name: "name",
+            type: :string,
+            required: true,
+            description: "Lowercase, starting with a letter"
+          }
+        ] ++ pose_arguments("the tool centre point, from the flange"),
+      output_args: [
+        %ResultField{name: "name", type: :string, description: "The tool that was taught"},
+        %ResultField{
+          name: "created",
+          type: :boolean,
+          description: "True if the tool did not exist before this call"
+        }
+      ]
+    }
+  end
+
+  defp list_tools do
+    %Method{
+      id: "cell.list_tools",
+      name: "ListTools",
+      description: "Every stored tool, its six numbers, and which one is fitted.",
+      async: false,
+      call_grant: :read_state,
+      output_args: [
+        %ResultField{
+          name: "tools",
+          type: {:array, {:ref, "type.stored_tool"}},
+          description: "Stored tools, by name"
+        }
+      ]
+    }
+  end
+
+  defp fit_tool do
+    %Method{
+      id: "cell.fit_tool",
+      name: "FitTool",
+      description:
+        "Records that this tool is now on the flange, and that whatever was " <>
+          "there is not. Every pose the controller computes changes with it: " <>
+          "the tool centre point moves without the arm moving, and the ISO " <>
+          "10218 speed cap starts applying to a different point. It is refused " <>
+          "while the arm is moving, because a tool change mid-move would mean " <>
+          "the motion finished somewhere other than where it was aimed.\n\n" <>
+          "Guarded by `write_configuration` today. Fitting is arguably an " <>
+          "operator action where teaching is an engineering one, and the split " <>
+          "wants its own grant the first time somebody must be allowed to " <>
+          "change a gripper without being allowed to re-teach it.",
+      async: false,
+      call_grant: :write_configuration,
+      input_args: [
+        %Argument{name: "name", type: :string, required: true, description: "The tool to fit"}
+      ]
+    }
+  end
+
+  defp release_tool do
+    %Method{
+      id: "cell.release_tool",
+      name: "ReleaseTool",
+      description:
+        "Records a bare flange. The tool centre point becomes the flange, " <>
+          "which is where it actually is once the gripper is in your hand.",
+      async: false,
+      call_grant: :write_configuration
     }
   end
 
