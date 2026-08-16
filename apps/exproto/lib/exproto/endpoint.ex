@@ -70,7 +70,7 @@ defmodule ExProto.Endpoint do
         # releases every hold, so the thing it releases them through has to
         # outlive it — and no connection should be able to jog before there is
         # a mode to check against.
-        {Mode, name: mode, jog: jog},
+        {Mode, name: mode, jog: jog, position: Keyword.get(opts, :mode_position, :manual)},
         {Bandit,
          plug: {Router, built.plug_opts},
          scheme: scheme,

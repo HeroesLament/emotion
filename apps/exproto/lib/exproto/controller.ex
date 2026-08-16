@@ -40,6 +40,7 @@ defmodule ExProto.Controller do
     * `:tls` — passed to `ExProto.TLS.material/1`; `:dir` is where the
       certificate lives
     * `:clock` — `:internal` (default) or `:external`
+    * `:mode_position` — where the mode selector starts; `:manual` by default
   """
   def start_link(opts \\ []) do
     with {:ok, table} <- node_table(),
@@ -49,7 +50,7 @@ defmodule ExProto.Controller do
 
       endpoint_opts =
         opts
-        |> Keyword.take([:port, :scheme, :tls])
+        |> Keyword.take([:port, :scheme, :tls, :mode_position])
         |> Keyword.merge(table: table, source: {Source.Exdrive, [mode: mode]}, mode: mode)
 
       Endpoint.start_link(endpoint_opts)
