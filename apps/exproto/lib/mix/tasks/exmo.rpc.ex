@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       mix exmo.rpc browse [nodeId]
       mix exmo.rpc read <nodeId> [nodeId...]
       mix exmo.rpc write <nodeId> <value>
-      mix exmo.rpc call <nodeId>
+      mix exmo.rpc call <nodeId> [key=value ...]
       mix exmo.rpc jog <nodeId> <velocity> [--for 3] [--axis z] [--frame tool]
       mix exmo.rpc watch <nodeId> [nodeId...] [--rate 5] [--for 10]
 
@@ -82,7 +82,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       ["browse", node] -> with_session(host, port, conn_opts, &browse(&1, &2, node))
       ["read" | ids] when ids != [] -> with_session(host, port, conn_opts, &read(&1, &2, ids))
       ["write", node, value] -> with_session(host, port, conn_opts, &write(&1, &2, node, value))
-      ["call", node] -> with_session(host, port, conn_opts, &invoke(&1, &2, node))
+      ["call", node | args] -> with_session(host, port, conn_opts, &invoke(&1, &2, node, args))
       ["jog", node, velocity] -> with_session(host, port, conn_opts, &jog(&1, &2, node, velocity, opts))
       ["watch" | ids] when ids != [] -> with_session(host, port, conn_opts, &watch(&1, &2, ids, opts))
       _ -> Mix.shell().info(@moduledoc)
@@ -245,8 +245,14 @@ defmodule Mix.Tasks.Exmo.Rpc do
     end
   end
 
-  defp invoke(session, _result, node_id) do
-    case Client.request(session, "nodes/call", %{"nodeId" => node_id}) do
+  defp invoke(session, _result, node_id, args) do
+    params =
+      case arguments(args) do
+        arguments when map_size(arguments) == 0 -> %{"nodeId" => node_id}
+        arguments -> %{"nodeId" => node_id, "arguments" => arguments}
+      end
+
+    case Client.request(session, "nodes/call", params) do
       {:ok, _session, %{"result" => result}} ->
         # Accepted, not finished. Saying so here rather than printing something
         # that reads like completion, because the difference matters on a
@@ -288,6 +294,20 @@ defmodule Mix.Tasks.Exmo.Rpc do
       {:error, message} ->
         Mix.shell().error("  #{message}")
     end
+  end
+
+  # `key=value` pairs, so any method with arguments can be called from here
+  # rather than only the ones that happen to have a dedicated switch. Numbers are
+  # parsed as numbers because the model's schemas are typed and a string where a
+  # double belongs is refused — correctly, and confusingly if the client is what
+  # turned it into a string.
+  defp arguments(args) do
+    Map.new(args, fn arg ->
+      case String.split(arg, "=", parts: 2) do
+        [key, value] -> {key, coerce(value)}
+        [_no_equals] -> Mix.raise("arguments are key=value, got #{inspect(arg)}")
+      end
+    end)
   end
 
   defp put_if(arguments, key, name, opts) do

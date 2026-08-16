@@ -421,7 +421,10 @@ defmodule ExMo.Schema.Registry do
           id: "axes.cartesian.state",
           name: "State",
           description:
-            "idle | tracking | limited | refused. `limited` means the motion " <>
+            "idle | tracking | limited | refused | done. `done` is a " <>
+              "`move_linear` that has arrived, and is distinct from `idle` on " <>
+              "purpose: a finished move and a move that was never asked for " <>
+              "should not look the same. `limited` means the motion " <>
               "is on the commanded line and slower than asked; read " <>
               "`speed_fraction` for how much slower and `reason` for why. " <>
               "`refused` means the arm cannot go where it was pointed and has " <>

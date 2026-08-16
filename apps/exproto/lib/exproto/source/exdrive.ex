@@ -203,30 +203,48 @@ defmodule ExProto.Source.Exdrive do
     Enum.map(node_ids, &{&1, cartesian_value(&1, status)})
   end
 
-  defp cartesian_value("axes.cartesian.state", status) do
+  # Every shape the stream's status can take, and no catch-all on the way in.
+  #
+  # There was one missing — `{:done, :reached}`, added with `move_linear` in
+  # exmove and not taught to this projection — and the way it announced itself
+  # was a CaseClauseError inside a read, which closed the client's connection
+  # with a 1011. A client asking a perfectly reasonable question got its session
+  # dropped, which is a much worse failure than a wrong answer.
+  #
+  # `cartesian_status_test.exs` now walks every status the stream can produce
+  # through all four of these, so the next one added has to arrive here too.
+  @doc false
+  # Public so the projection can be tested against every status directly rather
+  # than only through whichever ones a live arm happens to reach.
+  def cartesian_value("axes.cartesian.state", status) do
     case status do
       :idle -> {:ok, "idle"}
       :tracking -> {:ok, "tracking"}
       {:limited, _reason, _fraction} -> {:ok, "limited"}
       {:refused, _reason} -> {:ok, "refused"}
+      {:done, _reason} -> {:ok, "done"}
     end
   end
 
-  defp cartesian_value("axes.cartesian.speed_fraction", status) do
+  def cartesian_value("axes.cartesian.speed_fraction", status) do
     case status do
       {:limited, _reason, fraction} -> {:ok, fraction}
       # Refused is 0.0 and not "the fraction it would have managed". The arm has
       # been commanded to zero, and a speed node reporting anything else while
       # the arm is stopped is the node lying about the machine.
       {:refused, _reason} -> {:ok, 0.0}
+      # A finished move is stopped, and stopped is not a fraction of a speed
+      # nobody is commanding any more.
+      {:done, _reason} -> {:ok, 0.0}
       _tracking_or_idle -> {:ok, 1.0}
     end
   end
 
-  defp cartesian_value("axes.cartesian.reason", status) do
+  def cartesian_value("axes.cartesian.reason", status) do
     case status do
       {:limited, reason, _fraction} -> {:ok, reason_name(reason)}
       {:refused, reason} -> {:ok, reason_name(reason)}
+      {:done, reason} -> {:ok, reason_name(reason)}
       _tracking_or_idle -> {:ok, ""}
     end
   end
@@ -234,7 +252,7 @@ defmodule ExProto.Source.Exdrive do
   # Empty rather than absent, and empty rather than "none". A pendant binding a
   # label to this node wants a string on every read, including the reads where
   # there is nothing to say.
-  defp cartesian_value("axes.cartesian.joint", status) do
+  def cartesian_value("axes.cartesian.joint", status) do
     case status do
       {:limited, {:joint_limit, joint}, _fraction} -> {:ok, Atom.to_string(joint)}
       {:refused, {:joint_limit, joint}} -> {:ok, Atom.to_string(joint)}
@@ -242,7 +260,7 @@ defmodule ExProto.Source.Exdrive do
     end
   end
 
-  defp cartesian_value("axes.cartesian.manipulability", _status) do
+  def cartesian_value("axes.cartesian.manipulability", _status) do
     chain = Registry.arm_chain()
 
     case joint_positions(chain) do
@@ -257,7 +275,7 @@ defmodule ExProto.Source.Exdrive do
     end
   end
 
-  defp cartesian_value(_unknown, _status), do: {:error, :unknown_node}
+  def cartesian_value(_unknown, _status), do: {:error, :unknown_node}
 
   defp reason_name({:joint_limit, _joint}), do: "joint_limit"
   defp reason_name(reason) when is_atom(reason), do: Atom.to_string(reason)
