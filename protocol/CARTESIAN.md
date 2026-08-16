@@ -479,6 +479,25 @@ tool ends up right and gets there smoothly, but a specific orientation partway
 round is not something this promises, which is why the via point takes a position
 and no rotation.
 
+### The drive mode, checked every tick
+
+The stream used to set `profile_velocity` once, when it started. That is fine
+until something else changes it — and something does: writing a position setpoint
+puts that drive into `profile_position`, deliberately, because otherwise the
+write is silently discarded.
+
+A stream that outlives such a write then spends its whole life commanding
+velocities into drives that ignore them. The arm does not move, every status
+reads healthy, and the stream cheerfully reports `tracking`. Found on a live
+controller by a `move_arc` that sat perfectly still and complained about nothing.
+
+So the mode is checked every tick and set only when wrong. It costs nothing: the
+drive's status was already read that tick for the joint position.
+
+The general shape is worth keeping in mind — **state set once at startup is a
+bet that nothing else touches it**, and on a controller with several ways to
+command the same drive that bet loses quietly.
+
 ### Still open
 
 Program execution. A queue that a client fills one call at a time is not a

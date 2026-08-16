@@ -763,6 +763,40 @@ defmodule ExMove.CartesianStreamTest do
     end
   end
 
+  describe "a drive whose mode changed underneath the stream" do
+    test "the stream puts it back rather than commanding into the void", ctx do
+      %{chain: chain, axis_ids: axis_ids} = ctx
+
+      from = tcp(chain)
+
+      :ok =
+        CartesianStream.move_linear(chain, %ExMove.Frame{from | z: from.z + 0.01},
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05
+        )
+
+      run(ctx, 200, 1.0)
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+
+      # Somebody writes a position setpoint. That deliberately puts the drive
+      # into profile_position — otherwise the write would be discarded — and it
+      # happens behind the stream's back.
+      for axis_id <- axis_ids do
+        Exdrive.Drive.set_mode(axis_id, :profile_position)
+      end
+
+      here = tcp(chain)
+      :ok = CartesianStream.move_linear(chain, %ExMove.Frame{here | z: here.z + 0.02}, feedrate: 0.05)
+      run(ctx, 200, 2.0)
+
+      # Without putting the mode back the arm does not move at all, while every
+      # status reads healthy and the stream reports itself as tracking. Found on
+      # a live controller, by an arc that sat perfectly still.
+      assert_in_delta tcp(chain).z, here.z + 0.02, 1.0e-3
+    end
+  end
+
   describe "move_arc" do
     test "goes round, not across", ctx do
       %{chain: chain} = ctx

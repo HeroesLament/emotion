@@ -997,8 +997,12 @@ defmodule ExMove.CartesianStream do
   defp joint_positions(chain) do
     Enum.reduce_while(chain.axis_ids, {:ok, []}, fn axis_id, {:ok, acc} ->
       case Exdrive.Drive.status(axis_id) do
-        %{actual_position: position} -> {:cont, {:ok, [position | acc]}}
-        _other -> {:halt, {:error, :unreadable}}
+        %{actual_position: position} = status ->
+          ensure_velocity_mode(axis_id, status)
+          {:cont, {:ok, [position | acc]}}
+
+        _other ->
+          {:halt, {:error, :unreadable}}
       end
     end)
     |> case do
@@ -1008,6 +1012,23 @@ defmodule ExMove.CartesianStream do
   catch
     :exit, _reason -> {:error, :unreadable}
   end
+
+  # Checked every tick, and set only when it is wrong.
+  #
+  # The mode used to be set once, when the stream started, which is fine until
+  # something else changes it — and something else does: writing a position
+  # setpoint puts that drive into profile_position, deliberately, because
+  # otherwise the write would be silently discarded. A stream that outlives such
+  # a write then spends its whole life commanding velocities into drives that
+  # ignore them, and the arm simply does not move while every status reads
+  # healthy. Found on a live controller after a `move_arc` that sat perfectly
+  # still and reported nothing wrong.
+  #
+  # It is free: the status was already read this tick for the joint position, so
+  # this costs a comparison, and the `set_mode` call only happens on the tick
+  # where the mode is actually wrong.
+  defp ensure_velocity_mode(_axis_id, %{mode: :profile_velocity}), do: :ok
+  defp ensure_velocity_mode(axis_id, _status), do: Exdrive.Drive.set_mode(axis_id, :profile_velocity)
 
   defp all_enabled(chain) do
     Enum.reduce_while(chain.axis_ids, :ok, fn axis_id, :ok ->
