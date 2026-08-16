@@ -318,6 +318,63 @@ defmodule ExMove.CartesianStreamTest do
     end
   end
 
+  describe "frames" do
+    # A pose with the wrist folded over, where the tool's +Z is 91.7° off the
+    # base's — measured, and chosen for exactly that. The bent pose the rest of
+    # this file uses has the tool only 5.7° from base, where the two frames agree
+    # closely enough that a test could pass on a frame argument that did nothing.
+    @across [0.0, 0.4, -1.0, 0.0, 2.2, 0.0]
+
+    test "the same twist in base and in tool produces different motion", ctx do
+      extend(ctx, @across)
+      base = travel(ctx, :base, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0])
+
+      extend(ctx, @across)
+      tool = travel(ctx, :tool, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0])
+
+      separation = distance(base, tool)
+
+      # Two 50mm moves at right angles end about 70mm apart. Asserting most of
+      # that rather than merely "not zero": a frame argument that rotated the
+      # twist slightly wrong would still be non-zero.
+      assert separation > 0.05,
+             "base and tool jogs ended #{Float.round(separation * 1000, 2)}mm apart"
+    end
+
+    test "both travel the same distance", ctx do
+      # Only the direction should differ. A frame that also changed the distance
+      # travelled would mean the transform was not a rotation.
+      extend(ctx, @across)
+      start = tcp(ctx.chain)
+      base_distance = distance(start, travel(ctx, :base, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0]))
+
+      extend(ctx, @across)
+      start = tcp(ctx.chain)
+      tool_distance = distance(start, travel(ctx, :tool, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0]))
+
+      assert_in_delta base_distance, tool_distance, base_distance * 0.05
+    end
+
+    test "an unknown frame is refused rather than treated as base", ctx do
+      %{chain: chain, axis_ids: axis_ids} = ctx
+
+      :ok =
+        CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0],
+          clock: :external,
+          hz: 200,
+          frame: :workpiece
+        )
+
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == {:refused, :unknown_frame}
+
+      for axis_id <- axis_ids do
+        assert Exdrive.Drive.status(axis_id).target_velocity == 0.0
+      end
+    end
+  end
+
   # ── Helpers ───────────────────────────────────────────────────────────────
 
   defp assert_straight(ctx, speed, hz, tolerance_mm) do
@@ -383,6 +440,14 @@ defmodule ExMove.CartesianStreamTest do
 
     for axis_id <- axis_ids, do: Exdrive.Drive.set_mode(axis_id, :profile_velocity)
     :ok
+  end
+
+  # Hold in `frame` for a second and report where the tool ended up.
+  defp travel(ctx, frame, twist) do
+    :ok = CartesianStream.hold(ctx.chain, twist, clock: :external, hz: 200, frame: frame)
+    run(ctx, 200, 1.0)
+    CartesianStream.release(ctx.chain.name)
+    tcp(ctx.chain)
   end
 
   defp run(ctx, hz, seconds) do

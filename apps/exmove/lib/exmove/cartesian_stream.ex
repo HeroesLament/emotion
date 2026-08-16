@@ -55,7 +55,7 @@ defmodule ExMove.CartesianStream do
 
   use GenServer
 
-  alias ExMove.{Chain, IK, JointState}
+  alias ExMove.{Chain, FK, IK, JointState}
 
   # 5ms. Each solve costs ~37µs measured, so this is under 1% of a core per arm,
   # and it puts the worst deviation at the manual speed limit comfortably inside
@@ -101,6 +101,7 @@ defmodule ExMove.CartesianStream do
 
   defstruct [
     :chain,
+    :frame,
     :twist,
     :hz,
     :tick_ms,
@@ -125,6 +126,8 @@ defmodule ExMove.CartesianStream do
   there is nothing useful for the caller to do with a reply.
   """
   def hold(%Chain{} = chain, twist, opts \\ []) when length(twist) == 6 do
+    frame = Keyword.get(opts, :frame, :base)
+
     case whereis(chain.name) do
       nil ->
         opts = opts |> Keyword.put(:chain, chain) |> Keyword.put(:twist, twist)
@@ -139,14 +142,14 @@ defmodule ExMove.CartesianStream do
           # ms later, from a client that is still holding the button — starts
           # cleanly.
           {:error, {:already_started, pid}} ->
-            if Process.alive?(pid), do: refresh(pid, twist), else: {:error, :restarting}
+            if Process.alive?(pid), do: refresh(pid, frame, twist), else: {:error, :restarting}
 
           {:error, reason} ->
             {:error, reason}
         end
 
       pid ->
-        refresh(pid, twist)
+        refresh(pid, frame, twist)
     end
   end
 
@@ -246,8 +249,8 @@ defmodule ExMove.CartesianStream do
 
   defp via(name), do: {:via, Registry, {ExMove.StreamRegistry, name}}
 
-  defp refresh(pid, twist) do
-    GenServer.cast(pid, {:refresh, twist})
+  defp refresh(pid, frame, twist) do
+    GenServer.cast(pid, {:refresh, frame, twist})
     :ok
   end
 
@@ -272,6 +275,7 @@ defmodule ExMove.CartesianStream do
 
       state = %__MODULE__{
         chain: chain,
+        frame: Keyword.get(opts, :frame, :base),
         twist: Keyword.fetch!(opts, :twist),
         hz: hz,
         tick_ms: max(round(1000 / hz), 1),
@@ -288,11 +292,11 @@ defmodule ExMove.CartesianStream do
   end
 
   @impl true
-  def handle_cast({:refresh, twist}, state) do
+  def handle_cast({:refresh, frame, twist}, state) do
     # Only the intent. Not the timer, not the phase: an assertion arriving
     # between two ticks must not be able to shorten or lengthen either of them,
     # or the client's jitter becomes the arm's.
-    {:noreply, %{state | twist: twist}}
+    {:noreply, %{state | frame: frame, twist: twist}}
   end
 
   @impl true
@@ -328,8 +332,10 @@ defmodule ExMove.CartesianStream do
   # tick that does not know its own length cannot.
   defp step(state, dt) do
     with {:ok, positions} <- joint_positions(state.chain),
+         js = %JointState{positions: positions},
+         {:ok, twist} <- in_base(state.frame, state.chain, js, state.twist),
          {:ok, %JointState{velocities: dq}, report} <-
-           IK.solve_velocity(state.chain, %JointState{positions: positions}, state.twist) do
+           IK.solve_velocity(state.chain, js, twist) do
       apply_solution(state, positions, dq, report, dt)
     else
       {:error, reason} -> refuse(state, reason)
@@ -447,6 +453,38 @@ defmodule ExMove.CartesianStream do
       room / step < 1.0 -> room / step
       true -> nil
     end
+  end
+
+  # The commanded twist, rotated into the base frame the Jacobian works in.
+  #
+  # Resolved every tick and not once at the press, because the tool frame moves
+  # with the tool. For a translation that makes no difference — translating does
+  # not change orientation — but a rotation about a tool axis is a rotation about
+  # an axis that is itself turning, and freezing it at the press would trace a
+  # cone where the operator asked for a spin.
+  #
+  # Both halves are rotated. A twist is two vectors in one frame, and rotating
+  # the linear part while leaving the angular part in base would produce motion
+  # in a frame that does not exist.
+  defp in_base(:base, _chain, _js, twist), do: {:ok, twist}
+
+  defp in_base(:tool, chain, js, twist) do
+    r = FK.solve_transform(chain, js)
+    [vx, vy, vz, wx, wy, wz] = twist
+
+    {lx, ly, lz} = rotate(r, {vx, vy, vz})
+    {ax, ay, az} = rotate(r, {wx, wy, wz})
+
+    {:ok, [lx, ly, lz, ax, ay, az]}
+  end
+
+  # An unknown frame is refused rather than quietly treated as base. A pendant
+  # showing USER and moving the arm in WORLD is the kind of wrong that gets
+  # noticed by a fixture.
+  defp in_base(_unknown, _chain, _js, _twist), do: {:error, :unknown_frame}
+
+  defp rotate({m0, m1, m2, _, m4, m5, m6, _, m8, m9, m10, _, _, _, _, _}, {x, y, z}) do
+    {m0 * x + m1 * y + m2 * z, m4 * x + m5 * y + m6 * z, m8 * x + m9 * y + m10 * z}
   end
 
   defp write(chain, velocities) do

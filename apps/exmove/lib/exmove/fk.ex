@@ -22,20 +22,31 @@ defmodule ExMove.FK do
   Solve FK for a chain at the given joint state.
   Returns a %Frame{} representing the TCP pose in the base frame.
   """
-  def solve(%Chain{} = chain, %JointState{positions: positions}) do
-    transforms =
-      chain.joints
-      |> Enum.zip(positions)
-      |> Enum.map(fn {joint, theta} -> joint_transform(joint, theta) end)
-
-    tool_tf = frame_to_transform(chain.tool)
-
-    tcp = Math.compose(transforms ++ [tool_tf])
+  def solve(%Chain{} = chain, %JointState{} = js) do
+    tcp = solve_transform(chain, js)
 
     {x, y, z}    = Math.translation_of(tcp)
     {rx, ry, rz} = Math.rpy_of(tcp)
 
     %Frame{x: x, y: y, z: z, rx: rx, ry: ry, rz: rz}
+  end
+
+  @doc """
+  Solve FK and return the TCP transform itself rather than a `%Frame{}`.
+
+  A `%Frame{}` carries orientation as roll, pitch and yaw, and rebuilding a
+  rotation matrix from those is a round trip through a parameterisation that is
+  singular at gimbal lock. Anything that needs the tool's *axes* — rotating a
+  twist into the tool frame, for one — should take them from here and never
+  compose Euler angles it did not have to.
+  """
+  def solve_transform(%Chain{} = chain, %JointState{positions: positions}) do
+    transforms =
+      chain.joints
+      |> Enum.zip(positions)
+      |> Enum.map(fn {joint, theta} -> joint_transform(joint, theta) end)
+
+    Math.compose(transforms ++ [frame_to_transform(chain.tool)])
   end
 
   @doc """
@@ -65,6 +76,8 @@ defmodule ExMove.FK do
 
     Math.mul(Math.mul(t_origin, r_rpy), r_joint)
   end
+
+  defp frame_to_transform(nil), do: Math.identity()
 
   defp frame_to_transform(%Frame{x: x, y: y, z: z, rx: rx, ry: ry, rz: rz}) do
     Math.mul(Math.translation(x, y, z), Math.rotation_rpy(rx, ry, rz))

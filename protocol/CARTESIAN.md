@@ -177,27 +177,51 @@ the axis model is where it belongs.
 
 ## 3. Frames
 
-Base only today. Finished:
+  * `base` — the arm's origin. Was the only one.
+  * `tool` — done. The twist is rotated into the current TCP orientation before
+    solving, both halves of it, and **re-resolved every controller tick** rather
+    than frozen at the press. For a translation that makes no difference, since
+    translating does not change orientation; for a rotation about a tool axis it
+    is the difference between a spin and a cone.
+  * `user` — named frames, stored on the controller as configuration because they
+    are facts about the cell. Model nodes under `frames.<name>`, writable behind
+    `write_configuration`. Not built; refused by the same clause that refuses a
+    typo, which is honest about what this build has.
 
-  * `base` — the arm's origin.
-  * `tool` — the twist is rotated into the current TCP orientation before
-    solving, rotational components included.
-  * `user` — named frames, stored on the controller as configuration because
-    they are facts about the cell. Model nodes under `frames.<name>`, writable
-    behind `write_configuration`.
+Unknown frame names are refused rather than quietly treated as base. A pendant
+showing USER while the arm moves in WORLD is a bug found by a fixture.
 
-One gap sits underneath all three. The Jacobian NIF is handed the joints and
-nothing else, so the point it solves for is the tip of the last joint, not the
-tool centre point — the tool offset lives on the Elixir `Chain`. `ExMove.IK.solve/4`
-targets the same point, so the two agree with each other, and while the offset is
-identity they also agree with the arm. Fit a real tool and every Cartesian
-command is solved for the wrong point. The tool has to be plumbed into the NIF
-before `tool` frame means anything.
-
-Unknown frame names are refused rather than quietly treated as base. The four
-jog modes on any commercial pendant — JOINT, WORLD, TOOL, USER — are then one
-joint method plus one Cartesian method with a frame argument, not four
+The four jog modes on any commercial pendant — JOINT, WORLD, TOOL, USER — are
+one joint method plus one Cartesian method with a frame argument, not four
 mechanisms.
+
+### The tool offset had never reached the solver
+
+Fixed first, because `tool` frame is meaningless without it. The Jacobian NIF was
+handed the joints and nothing else, so every Cartesian command solved for the tip
+of the last joint rather than for the tool centre point. `ExMove.IK.solve/4` had
+the same gap, so the two agreed with each other, and both agreed with the arm
+only while the offset was identity — which it is on the demo chain, which is why
+nothing complained.
+
+What makes this one worth writing down is *how* it hides. A tool is rigidly
+attached, so for a command with no angular component `v_tool` and `v_wrist` are
+identical: the offset cancels and a Jacobian written about the wrong point still
+produces exactly the right motion. Every translation test passes. Under rotation
+they differ by `ω × r`, and solving about the wrist for "turn about this axis and
+do not translate" holds the wrist still and swings the tool through an arc —
+measured at 7.8 mm/s of linear velocity for a command that asked for none. On a
+machine that looks like the tool orbiting the point it was supposed to pivot
+about.
+
+So the test that catches it has to be a rotation. Three of them now: the linear
+rows against a finite difference of FK with a tool fitted, a pure-rotation tool
+leaving the linear rows untouched (the composition-order check), and the orbit
+above.
+
+`max_reach/1` counts the tool as well, since it is used to reject targets before
+iterating and a bound that stops at the wrist rejects points the arm can
+comfortably touch.
 
 ## 4. Joint limits
 
@@ -309,8 +333,10 @@ caught what we shipped:
     limit; assert the arm stops on the boundary and not past it, that it slowed
     before it stopped rather than arriving at speed, that it names the joint,
     and that jogging away is not refused.
-  * **Frames.** The same twist in base and in tool produces different motion,
-    hand-checkable at a known pose.
+  * **Frames.** Done. The same twist in base and in tool produces different
+    motion — at a pose chosen because the tool's +Z is 91.7° off the base's,
+    measured. The bent pose the rest of the suite uses has them 5.7° apart,
+    where a frame argument that did nothing would still pass.
   * **Hold.** Already covered by the watchdog tests, and unchanged by any of
     this.
 
@@ -326,7 +352,10 @@ caught what we shipped:
    the first two of those three turned out to be the wrong things to build.
 5. ~~Joint-limit stop~~ — done. The first thing to use the `dt` the tick has
    been carrying since the stream landed.
-6. Tool frame, then user frames.
+6. ~~Tool frame~~ — done, along with the tool offset finally reaching the
+   solver, which it never had. User frames still to do: they need somewhere on
+   the controller to store a frame, which is configuration and does not exist
+   yet.
 7. Cartesian speed limit, then the mode interlock.
 8. `move_linear` / `move_arc` and the queue.
 9. Studio: Cartesian pendant, then the gizmo.

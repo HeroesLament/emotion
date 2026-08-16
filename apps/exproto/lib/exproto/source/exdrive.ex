@@ -347,7 +347,7 @@ defmodule ExProto.Source.Exdrive do
   # differential, so the arm cannot flip elbow-up to elbow-down partway through
   # because a different solution scored better. That flip is a collision.
   defp jog_cartesian(args) do
-    with {:ok, "base"} <- frame(args),
+    with {:ok, frame} <- frame(args),
          {:ok, twist} <- twist(args) do
       chain = Registry.arm_chain()
 
@@ -359,23 +359,30 @@ defmodule ExProto.Source.Exdrive do
       if stopped?(twist) do
         CartesianStream.release(chain)
       else
-        case CartesianStream.hold(chain, twist) do
+        case CartesianStream.hold(chain, twist, frame: frame) do
           :ok -> :ok
           {:error, _reason} -> {:error, :rejected}
         end
       end
     else
       {:error, reason} -> {:error, reason}
-      {:ok, _other_frame} -> {:error, :rejected}
     end
   end
 
   defp stopped?(twist), do: Enum.all?(twist, &(&1 == 0.0))
 
+  # Refused rather than quietly treated as base, which is the whole reason the
+  # argument is worth having. An operator who selects USER on a pendant and gets
+  # WORLD motion learns about it from the fixture.
+  #
+  # `user` is not here yet: user frames are stored on the controller as
+  # configuration, and there is nowhere to store them. It is refused by the same
+  # clause that refuses a typo, which is honest — this build does not have it.
   defp frame(args) do
     case Map.get(args, "frame") || "base" do
-      "base" -> {:ok, "base"}
-      other -> {:ok, other}
+      "base" -> {:ok, :base}
+      "tool" -> {:ok, :tool}
+      _unknown -> {:error, :rejected}
     end
   end
 

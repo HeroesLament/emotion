@@ -213,8 +213,7 @@ defmodule ExMo.Schema.Registry do
           required: true,
           description:
             "Which direction to move in: x | y | z for translation, rx | ry | " <>
-              "rz for rotation. Base frame — tool and user frames are not " <>
-              "implemented and are refused rather than quietly treated as base."
+              "rz for rotation. Interpreted in `frame`."
         },
         %Argument{
           name: "velocity",
@@ -229,7 +228,13 @@ defmodule ExMo.Schema.Registry do
           type: :string,
           required: false,
           default: "base",
-          description: "Only `base` for now. Anything else is refused."
+          description:
+            "`base` — the arm's origin, fixed in the cell. `tool` — the current " <>
+              "tool centre point orientation, re-resolved every controller " <>
+              "tick, so a rotation about a tool axis follows the tool rather " <>
+              "than tracing a cone. `user` frames are not implemented and are " <>
+              "refused, as is anything unrecognised: a pendant showing one " <>
+              "frame while the arm moves in another is a bug found by a fixture."
         },
         %Argument{
           name: "deadlineMs",
