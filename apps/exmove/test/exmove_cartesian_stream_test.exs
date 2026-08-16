@@ -375,6 +375,95 @@ defmodule ExMove.CartesianStreamTest do
     end
   end
 
+  describe "the tool speed limit" do
+    test "a jog above the manual limit is capped, not refused", ctx do
+      %{chain: chain} = ctx
+
+      # 1 m/s, four times what ISO 10218 allows in manual mode. The arm can do
+      # it — this pose is nowhere near a singularity and a joint would only have
+      # to turn 1.44 rad/s — so nothing about the machine objects. The cap does.
+      :ok =
+        CartesianStream.hold(chain, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+          clock: :external,
+          hz: 200,
+          max_joint_velocity: 5.0
+        )
+
+      step(ctx, 200)
+
+      assert {:limited, :tool_speed, fraction} = CartesianStream.status(chain.name)
+      assert_in_delta fraction, 0.25, 0.001
+    end
+
+    test "the tool travels at the limit rather than at what was asked", ctx do
+      %{chain: chain} = ctx
+
+      :ok =
+        CartesianStream.hold(chain, [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+          clock: :external,
+          hz: 200,
+          max_joint_velocity: 5.0
+        )
+
+      run(ctx, 200, 0.25)
+      from = tcp(chain)
+      run(ctx, 200, 1.0)
+
+      # 250 mm in the second, not the metre that was commanded.
+      assert_in_delta distance(from, tcp(chain)), 0.25, 0.01
+    end
+
+    test "a jog below the limit is untouched by it", ctx do
+      %{chain: chain} = ctx
+
+      :ok = CartesianStream.hold(chain, [0.0, 0.0, 0.05, 0.0, 0.0, 0.0], clock: :external, hz: 200)
+      step(ctx, 200)
+
+      assert CartesianStream.status(chain.name) == :tracking
+    end
+
+    test "a cap doing its job never reads as a refusal", ctx do
+      %{chain: chain, axis_ids: axis_ids} = ctx
+
+      # 10 m/s scales to a fortieth of what was asked — below the speed floor
+      # that refuses a jog which has run out of arm. It must not refuse here: the
+      # arm is fine, the number was silly, and the machine's answer is "no, 250
+      # mm/s" rather than "something is wrong".
+      :ok =
+        CartesianStream.hold(chain, [0.0, 0.0, 10.0, 0.0, 0.0, 0.0],
+          clock: :external,
+          hz: 200,
+          max_joint_velocity: 50.0
+        )
+
+      step(ctx, 200)
+
+      assert {:limited, :tool_speed, _fraction} = CartesianStream.status(chain.name)
+
+      assert Enum.any?(axis_ids, &(abs(Exdrive.Drive.status(&1).target_velocity) > 0.0)),
+             "the arm was stopped by a limit that was only supposed to slow it"
+    end
+
+    test "a rotation is not measured against a limit in metres per second", ctx do
+      %{chain: chain} = ctx
+
+      # 2 rad/s about the tool centre point. Its linear speed is zero by
+      # definition, so a cap on translation has nothing to say — and comparing
+      # the two under one norm would slow a spin for being fast in the wrong
+      # unit.
+      :ok =
+        CartesianStream.hold(chain, [0.0, 0.0, 0.0, 2.0, 0.0, 0.0],
+          clock: :external,
+          hz: 200,
+          max_joint_velocity: 50.0
+        )
+
+      step(ctx, 200)
+
+      refute match?({:limited, :tool_speed, _}, CartesianStream.status(chain.name))
+    end
+  end
+
   # ── Helpers ───────────────────────────────────────────────────────────────
 
   defp assert_straight(ctx, speed, hz, tolerance_mm) do

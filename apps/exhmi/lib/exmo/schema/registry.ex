@@ -200,9 +200,10 @@ defmodule ExMo.Schema.Registry do
           "tool rather than tracing a cone. Solved differentially from where " <>
           "the arm is, so it stays on the configuration it is already in " <>
           "rather than flipping elbow or wrist mid-move. When a joint would " <>
-          "have to turn faster than it can, or would run out of travel, the " <>
-          "whole joint vector is scaled rather than clamped per joint — the " <>
-          "tool stays exactly on the commanded line and the motion slows. " <>
+          "have to turn faster than it can, or would run out of travel, or " <>
+          "more tool speed is asked for than manual mode allows, the whole " <>
+          "joint vector is scaled rather than clamped per joint — the tool " <>
+          "stays exactly on the commanded line and the motion slows. " <>
           "Watch `axes.cartesian` for what the controller is making of it: " <>
           "the state, the fraction of commanded speed being delivered, the " <>
           "reason, and the joint responsible when there is one. Approaching a " <>
@@ -226,7 +227,11 @@ defmodule ExMo.Schema.Registry do
           required: true,
           description:
             "Signed tool speed, m/s for a translation and rad/s for a " <>
-              "rotation. Zero is the neutral assertion."
+              "rotation. Zero is the neutral assertion. Translation is capped " <>
+              "at the manual-mode tool speed limit — 250 mm/s per ISO 10218 — " <>
+              "by scaling rather than by refusing, so asking for more gets a " <>
+              "slower move in the right direction rather than an error. A " <>
+              "functional limit, not a safety-rated one."
         },
         %Argument{
           name: "frame",
@@ -365,9 +370,12 @@ defmodule ExMo.Schema.Registry do
               "`rate` — a joint would have to turn faster than it can, which is " <>
               "what approaching a singularity looks like from the rate side. " <>
               "`joint_limit` — a joint is at or approaching the end of its " <>
-              "travel; `joint` names it. `singular` — the arm cannot move in " <>
-              "the direction asked at all. `unreadable` — a joint could not be " <>
-              "read, which is a wiring problem rather than a kinematic one.",
+              "travel; `joint` names it. `tool_speed` — more tool speed was " <>
+              "asked for than manual mode allows, which is policy rather than " <>
+              "the arm's own limit and never causes a refusal. `singular` — " <>
+              "the arm cannot move in the direction asked at all. `unreadable` " <>
+              "— a joint could not be read, which is a wiring problem rather " <>
+              "than a kinematic one.",
           type: :string,
           readable: true,
           writable: false,

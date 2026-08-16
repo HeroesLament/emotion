@@ -90,6 +90,24 @@ defmodule ExMove.CartesianStream do
   # tools — rather than as the guard that fires every day.
   @default_residual_floor 0.25
 
+  # Metres per second at the tool centre point. ISO 10218 puts manual-mode
+  # motion at 250 mm/s, and this is the only place in the system that can
+  # enforce it: it is the only place that knows the tool speed being commanded.
+  #
+  # Functional, not protective. It runs on the same BEAM as the thing it guards,
+  # so it is a convenience against a slipped decimal point in a pendant and not
+  # a safety-rated speed limiter. The E-stop is a hardware circuit; see
+  # protocol/DESIGN.md on the split.
+  #
+  # Always on, because manual is the only mode this controller has. When mode
+  # becomes real — `state.controller_mode` is declared in the model and nothing
+  # serves it — this becomes the manual-mode value and auto gets its own.
+  #
+  # It caps translation only. A rotation about the tool centre point moves the
+  # TCP at zero by definition, so this never binds on one, while points out on
+  # the tool body are moving at ω×r. That gap is real and is not closed here.
+  @default_max_tool_velocity 0.25
+
   # The fraction of the commanded tool speed below which the jog is refused
   # rather than reported as slow.
   #
@@ -106,6 +124,7 @@ defmodule ExMove.CartesianStream do
     :hz,
     :tick_ms,
     :max_joint_velocity,
+    :max_tool_velocity,
     :residual_floor,
     :speed_floor,
     :clock,
@@ -190,6 +209,10 @@ defmodule ExMove.CartesianStream do
     * `{:limited, {:joint_limit, axis_id}, fraction}` — that joint is about to
       reach the end of its travel, and the whole motion is slowed so the arm
       lands on the boundary rather than a tick past it.
+    * `{:limited, :tool_speed, fraction}` — more tool speed was asked for than
+      manual mode allows. Unlike the other two this is policy rather than the
+      arm's own limit, and it never causes a refusal: a cap doing its job must
+      not look like a machine that has failed.
     * `{:refused, :singular}` — either the command is not achievable in the
       direction asked, or the achievable fraction of it has collapsed to nothing.
       Zero is written and the arm stops. Use joint jog, which is the only way out
@@ -280,6 +303,7 @@ defmodule ExMove.CartesianStream do
         hz: hz,
         tick_ms: max(round(1000 / hz), 1),
         max_joint_velocity: Keyword.get(opts, :max_joint_velocity, @default_max_joint_velocity),
+        max_tool_velocity: Keyword.get(opts, :max_tool_velocity, @default_max_tool_velocity),
         residual_floor: Keyword.get(opts, :residual_floor, @default_residual_floor),
         speed_floor: Keyword.get(opts, :speed_floor, @default_speed_floor),
         clock: clock
@@ -336,7 +360,7 @@ defmodule ExMove.CartesianStream do
          {:ok, twist} <- in_base(state.frame, state.chain, js, state.twist),
          {:ok, %JointState{velocities: dq}, report} <-
            IK.solve_velocity(state.chain, js, twist) do
-      apply_solution(state, positions, dq, report, dt)
+      apply_solution(state, positions, dq, twist, report, dt)
     else
       {:error, reason} -> refuse(state, reason)
     end
@@ -349,17 +373,27 @@ defmodule ExMove.CartesianStream do
   # hold above lapses would mean an arm that could not do what was asked carries
   # on doing the last thing it could, for up to a deadline. An arm that stops
   # because it has run out of arm should stop.
-  defp apply_solution(state, positions, dq, report, dt) do
+  defp apply_solution(state, positions, dq, twist, report, dt) do
     rate = rate_factor(dq, state.max_joint_velocity)
     {limit, joint} = limit_factor(state.chain, positions, dq, dt)
+    speed = tool_speed_factor(twist, state.max_tool_velocity)
 
-    # Both are uniform scales of the same raw vector, so the binding one is
-    # simply the smaller, and comparing them is comparing like with like. This
+    # All three are uniform scales of the same raw motion, so the binding one is
+    # simply the smallest, and comparing them is comparing like with like. This
     # is also why the limit factor is computed from the unscaled dq rather than
-    # from the rate-scaled one: two fractions of the same thing compose by
-    # taking a minimum, two fractions of each other compose by multiplying, and
-    # only one of those is what "stop on the boundary" means.
-    {fraction, reason} = if limit < rate, do: {limit, {:joint_limit, joint}}, else: {rate, :rate}
+    # from the rate-scaled one: fractions of the same thing compose by taking a
+    # minimum, fractions of each other compose by multiplying, and only one of
+    # those is what "stop on the boundary" means.
+    #
+    # But only two of the three describe the arm. Rate and joint limits are the
+    # machine saying what it cannot do; the tool speed cap is policy saying what
+    # it may not. That distinction decides the refusal below, so the two are kept
+    # apart rather than minimised together and sorted out afterwards.
+    {reachable, reachable_reason} =
+      if limit < rate, do: {limit, {:joint_limit, joint}}, else: {rate, :rate}
+
+    {fraction, reason} =
+      if speed < reachable, do: {speed, :tool_speed}, else: {reachable, reachable_reason}
 
     cond do
       # Not the direction asked for. Almost always exactly zero, so this fires
@@ -367,11 +401,13 @@ defmodule ExMove.CartesianStream do
       report.residual > state.residual_floor ->
         refuse(state, :singular)
 
-      # Going nowhere. Which of the two reasons put it there is carried through
-      # rather than collapsed: "the arm stopped" is a support call, and "J5 is at
-      # its limit" is something an operator can act on without one.
-      fraction < state.speed_floor ->
-        refuse(state, refusal_reason(reason))
+      # Going nowhere, and going nowhere *because the arm cannot*. The speed cap
+      # is deliberately not part of this test: commanding 10 m/s scales to a
+      # fortieth of what was asked, which is the cap working exactly as intended
+      # and would otherwise read as an arm that has run out of travel. A limit
+      # doing its job must never look like a failure.
+      reachable < state.speed_floor ->
+        refuse(state, refusal_reason(reachable_reason))
 
       true ->
         velocities = Enum.map(dq, &(&1 * fraction))
@@ -380,6 +416,18 @@ defmodule ExMove.CartesianStream do
         status = if fraction < 1.0, do: {:limited, reason, fraction}, else: :tracking
         {%{state | status: status}, {:ok, velocities}}
     end
+  end
+
+  # The fraction of the commanded translation that fits under the tool speed
+  # ceiling.
+  #
+  # Only the linear half. The angular half is rad/s about the tool centre point
+  # and has no business being compared against a limit in m/s — adding them under
+  # one norm would make a fast spin look like a fast translation and slow both.
+  defp tool_speed_factor([vx, vy, vz, _wx, _wy, _wz], ceiling) do
+    speed = :math.sqrt(vx * vx + vy * vy + vz * vz)
+
+    if speed > ceiling, do: ceiling / speed, else: 1.0
   end
 
   # A rate ceiling that has scaled the motion to nothing is a singularity by

@@ -270,14 +270,40 @@ solution mid-move is exactly how it happens.
 
 ## 6. Cartesian speed limit
 
-Manual-mode speed is a limit on the *tool*, not on any joint — ISO 10218 puts
-it at 250 mm/s at the TCP. The stream is the only place that can enforce it,
-because it is the only place that knows the tool speed being commanded. The
-per-joint clamp that exists today is a convenience against a slipped decimal
-point and is not this.
+Done. 250 mm/s at the tool centre point, per ISO 10218, applied in the stream —
+the only place that can, because it is the only place that knows the tool speed
+being commanded.
 
-Functional, not protective. The E-stop is a hardware circuit and is not in this
-document.
+It is the third uniform scale in the same tick, alongside the joint rate ceiling
+and the joint-limit stop, and it composes with them the same way: all three are
+fractions of the same raw motion, so the binding one is the smallest.
+
+**But only two of the three describe the arm**, and that turns out to matter.
+Rate and joint limits are the machine saying what it *cannot* do; the speed cap
+is policy saying what it *may not*. The refusal test — "the achievable fraction
+has collapsed, so say so rather than creep" — must be computed from the first two
+alone. Commanding 10 m/s scales to a fortieth of what was asked, which is below
+the refusal floor and is also the cap working exactly as designed. A limit doing
+its job must never look like a machine that has failed.
+
+Translation only. A rotation about the tool centre point moves that point at zero
+by definition, so this never binds on one, while points out on the tool body are
+moving at ω×r. That gap is real and is not closed here. Nor are the two halves
+summed under one norm: rad/s and m/s are not comparable, and adding them would
+slow a spin for being fast in the wrong unit.
+
+Always on, because manual is the only mode this controller has. `state.controller_mode`
+is declared in the model and nothing serves it — see section 7. When it is real
+this becomes the manual value and auto gets its own.
+
+Functional, not protective. It runs on the same BEAM as the thing it guards, so
+it is a convenience against a slipped decimal point in a pendant and not a
+safety-rated speed limiter. The E-stop is a hardware circuit. See
+`protocol/DESIGN.md` on the split.
+
+Reported as `{:limited, :tool_speed, fraction}`, so a pendant can say the arm is
+at the manual limit rather than leaving an operator to wonder why 1 m/s produced
+250 mm/s.
 
 ## 7. Mode
 
@@ -324,7 +350,8 @@ caught what we shipped:
   * **Straightness.** Jog +Z for two seconds; assert maximum deviation from the
     commanded line stays under a millimetre — at the manual speed limit, not at
     jog speed, which is where the margin actually is.
-  * **Speed.** `|Δp|/Δt` within a few percent of what was asked for.
+  * **Speed.** Done. `|Δp|/Δt` within a few percent of what was asked for, and
+    within a few percent of the *limit* when more than the limit was asked for.
   * **Singularity.** Done — `exmove_singularity_test.exs`. Approach both kinds;
     assert the rates diverge at one and not the other, that the residual sees
     the difference and manipulability does not, and that the stream reports
@@ -356,6 +383,7 @@ caught what we shipped:
    solver, which it never had. User frames still to do: they need somewhere on
    the controller to store a frame, which is configuration and does not exist
    yet.
-7. Cartesian speed limit, then the mode interlock.
+7. ~~Cartesian speed limit~~ — done. The mode interlock still to do, and it is
+   what turns this limit from always-on into manual-only.
 8. `move_linear` / `move_arc` and the queue.
 9. Studio: Cartesian pendant, then the gizmo.
