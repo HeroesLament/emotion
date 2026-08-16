@@ -163,7 +163,7 @@ defmodule ExMo.Schema.Registry do
           "in radians, velocities in rad/s, the tool in metres.",
       children:
         Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1) ++
-          [tcp_object(), cartesian_jog()]
+          [tcp_object(), cartesian_motion_object(), cartesian_jog()]
     }
   end
 
@@ -296,6 +296,73 @@ defmodule ExMo.Schema.Registry do
             }
           end
         )
+    }
+  end
+
+  # ── What the Cartesian motion is actually doing ───────────────────────────
+
+  # A jog near a singularity slows down. That is correct — the arm cannot hold a
+  # constant tool speed there — and it is indistinguishable, from a pendant, from
+  # a controller that has hung. Whether the operator experiences a machine
+  # explaining itself or a machine that feels broken is decided entirely by
+  # whether these two nodes exist.
+  #
+  # Read-only and observable, because this is the controller narrating its own
+  # decisions. Nothing writes here; the way to change it is to jog somewhere
+  # else.
+  defp cartesian_motion_object do
+    %Object{
+      id: "axes.cartesian",
+      name: "Cartesian",
+      description:
+        "What the controller is making of the Cartesian motion it has been " <>
+          "asked for. Idle unless a Cartesian jog is being held.",
+      children: [
+        %Property{
+          id: "axes.cartesian.state",
+          name: "State",
+          description:
+            "idle | tracking | limited | refused. `limited` means the motion " <>
+              "is on the commanded line and slower than asked, which is what " <>
+              "approaching a singularity looks like; read `speed_fraction` for " <>
+              "how much slower. `refused` means the arm cannot go where it was " <>
+              "pointed and has been commanded to zero — use a joint jog, which " <>
+              "is the only way out of a singularity.",
+          type: :string,
+          readable: true,
+          writable: false,
+          observable: true
+        },
+        %Property{
+          id: "axes.cartesian.speed_fraction",
+          name: "SpeedFraction",
+          description:
+            "The fraction of the commanded tool speed being delivered, 0 to 1. " <>
+              "1.0 when tracking or idle. Below 1 the joint rates the command " <>
+              "asks for exceed what a joint can turn, and the whole vector is " <>
+              "scaled — so the direction is exactly as commanded and only the " <>
+              "speed gives way.",
+          type: :double,
+          readable: true,
+          writable: false,
+          observable: true
+        },
+        %Property{
+          id: "axes.cartesian.manipulability",
+          name: "Manipulability",
+          description:
+            "sqrt(det(J·Jt)) at the current pose, zero at a singularity. " <>
+              "Published for a viewport to shade reachability with, and " <>
+              "deliberately not what the controller decides on: it describes " <>
+              "the pose and not the command, so it collapses identically " <>
+              "whether the freedom being lost is one the operator asked for or " <>
+              "one they did not.",
+          type: :double,
+          readable: true,
+          writable: false,
+          observable: true
+        }
+      ]
     }
   end
 

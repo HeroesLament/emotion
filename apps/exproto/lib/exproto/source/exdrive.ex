@@ -37,7 +37,7 @@ defmodule ExProto.Source.Exdrive do
   require Logger
 
   alias ExMo.Schema.Registry
-  alias ExMove.{CartesianStream, FK, JointState}
+  alias ExMove.{CartesianStream, FK, IK, JointState}
 
   # CiA 402 states in which the drive accepts a setpoint. Everything else
   # discards it; see Exdrive.Drive.
@@ -58,9 +58,10 @@ defmodule ExProto.Source.Exdrive do
 
   @impl ExProto.Source
   def read_many(node_ids, _arg) do
-    {tcp_ids, axis_ids} = Enum.split_with(node_ids, &tcp?/1)
+    {cartesian_ids, rest} = Enum.split_with(node_ids, &cartesian?/1)
+    {tcp_ids, axis_ids} = Enum.split_with(rest, &tcp?/1)
 
-    read_axes(axis_ids) ++ read_tcp(tcp_ids)
+    read_axes(axis_ids) ++ read_tcp(tcp_ids) ++ read_cartesian(cartesian_ids)
   end
 
   defp read_axes(node_ids) do
@@ -128,12 +129,71 @@ defmodule ExProto.Source.Exdrive do
 
   defp tcp?(node_id), do: String.starts_with?(node_id, "axes.tcp.")
 
+  # ── What the Cartesian motion is doing ────────────────────────────────────
+
+  # The stream's own account of itself, projected onto the model.
+  #
+  # These are read from the stream rather than recomputed here. Recomputing would
+  # give a second opinion formed a few milliseconds later from a different pose,
+  # and a client comparing "the arm is limited to 12%" against an arm that is not
+  # limited any more has been told two true things that contradict each other.
+  #
+  # No stream running is `idle` rather than an error: nothing is wrong with an
+  # arm that is not being jogged, and a pendant rendering this node needs a value
+  # for the case it will see most of the time.
+  defp read_cartesian([]), do: []
+
+  defp read_cartesian(node_ids) do
+    status = CartesianStream.status(Registry.arm_chain().name) || :idle
+    Enum.map(node_ids, &{&1, cartesian_value(&1, status)})
+  end
+
+  defp cartesian_value("axes.cartesian.state", status) do
+    case status do
+      :idle -> {:ok, "idle"}
+      :tracking -> {:ok, "tracking"}
+      {:limited, _fraction} -> {:ok, "limited"}
+      {:refused, _reason} -> {:ok, "refused"}
+    end
+  end
+
+  defp cartesian_value("axes.cartesian.speed_fraction", status) do
+    case status do
+      {:limited, fraction} -> {:ok, fraction}
+      # Refused is 0.0 and not "the fraction it would have managed". The arm has
+      # been commanded to zero, and a speed node reporting anything else while
+      # the arm is stopped is the node lying about the machine.
+      {:refused, _reason} -> {:ok, 0.0}
+      _tracking_or_idle -> {:ok, 1.0}
+    end
+  end
+
+  defp cartesian_value("axes.cartesian.manipulability", _status) do
+    chain = Registry.arm_chain()
+
+    case joint_positions(chain) do
+      {:ok, positions} ->
+        # Observable whether or not a jog is being held — a viewport shading
+        # reachability wants it while the arm is standing still, which is when
+        # somebody is deciding where to send it.
+        {:ok, IK.manipulability(chain, %JointState{positions: positions})}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp cartesian_value(_unknown, _status), do: {:error, :unknown_node}
+
+  defp cartesian?(node_id), do: String.starts_with?(node_id, "axes.cartesian.")
+
   @impl ExProto.Source
   def write(node_id, value, _arg) do
     with {:ok, axis, "target_position"} <- parse(node_id),
          {:ok, target} <- as_float(value),
          {:ok, status} <- status(axis),
-         :ok <- accepting?(status) do
+         :ok <- accepting?(status),
+         {:ok, _mode} <- ensure_position_mode(axis, status) do
       Exdrive.Drive.set_target_position(axis, target)
 
       # A call is ordered behind the casts already sent, so this observes the
@@ -208,6 +268,19 @@ defmodule ExProto.Source.Exdrive do
   # machine ten times a second to tell it what it already knows.
   defp ensure_velocity_mode(_axis, %{mode: :profile_velocity}), do: {:ok, :profile_velocity}
   defp ensure_velocity_mode(axis, _status), do: set_mode(axis, :profile_velocity)
+
+  # The same for the other direction, and it is not symmetry for its own sake.
+  #
+  # A drive left in profile_velocity — which is where every jog leaves it —
+  # ignores a position setpoint completely. Without this, writing
+  # `target_position` after a jog stores the number, reads it back, and reports
+  # success to a client whose arm has not moved and is not going to. That is the
+  # exact failure this module's docstring describes for the PDS state, arrived at
+  # through the mode instead, and it took a live session to notice because
+  # everything reported fine.
+  defp ensure_position_mode(_axis, %{mode: :profile_position}), do: {:ok, :profile_position}
+  defp ensure_position_mode(_axis, %{mode: :homing} = _status), do: {:ok, :homing}
+  defp ensure_position_mode(axis, _status), do: set_mode(axis, :profile_position)
 
   # A manual-mode speed limit, and a functional one: the constraint that
   # actually matters is the 250 mm/s ISO 10218 puts on the tool centre point,

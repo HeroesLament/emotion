@@ -54,11 +54,11 @@ defmodule ExMo.Projection.JSONRPCTest do
     test "browse returns direct children in declaration order", %{table: table} do
       names = table |> JSONRPC.children("axes") |> Elixir.Enum.map(& &1.name)
 
-      # The joints in order, then the point at the end of them, then the one
-      # command that moves all six at once. A pendant draws this list top to
-      # bottom, so J3 appearing above J2 would be a real bug rather than a
-      # cosmetic one.
-      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP JogCartesian)
+      # The joints in order, then the point at the end of them, then what the
+      # controller is making of the Cartesian motion, then the one command that
+      # moves all six at once. A pendant draws this list top to bottom, so J3
+      # appearing above J2 would be a real bug rather than a cosmetic one.
+      assert names == ~w(J1 J2 J3 J4 J5 J6 TCP Cartesian JogCartesian)
     end
   end
 
@@ -72,7 +72,9 @@ defmodule ExMo.Projection.JSONRPCTest do
       joints =
         table
         |> JSONRPC.children("axes")
-        |> Elixir.Enum.filter(&(&1.class == :object and &1.node_id != "axes.tcp"))
+        |> Elixir.Enum.filter(
+          &(&1.class == :object and &1.node_id not in ["axes.tcp", "axes.cartesian"])
+        )
 
       assert length(joints) == 6
     end

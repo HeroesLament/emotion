@@ -183,6 +183,21 @@ defmodule ExMove.IK do
     end
   end
 
+  @doc """
+  `sqrt(det(J·Jt))` at the given pose — zero at a singularity, larger where the
+  arm has more room to manoeuvre.
+
+  Available on its own because it is a fact about a pose and needs no command:
+  a viewport shading reachability wants it for an arm that is standing still,
+  which is exactly when somebody is deciding where to send it.
+
+  It is not what a controller should decide on. See `solve_velocity/4`.
+  """
+  def manipulability(%Chain{} = chain, %JointState{} = js) do
+    %{flat: jac, n: n} = jacobian(chain, js)
+    :math.sqrt(abs(determinant(jjt(jac, n))))
+  end
+
   defp peak([]), do: 0.0
   defp peak(dq), do: dq |> Enum.map(&abs/1) |> Enum.max()
 
