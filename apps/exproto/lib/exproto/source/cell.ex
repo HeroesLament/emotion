@@ -92,6 +92,7 @@ defmodule ExProto.Source.Cell do
           "joints" => Point.joints(point),
           "mutable" => point.mutable
         })
+        |> Map.merge(base_pose(point))
       end
 
     {:ok, %{"points" => points}}
@@ -230,6 +231,21 @@ defmodule ExProto.Source.Cell do
   defp as_float(value) when is_float(value), do: value
   defp as_float(value) when is_integer(value), do: value * 1.0
   defp as_float(_other), do: 0.0
+
+  # A point whose frame has gone missing has no base pose, and saying so with
+  # zeroes would put it at the arm's origin — which is a place, and a plausible
+  # one. The fields are simply absent instead.
+  defp base_pose(point) do
+    case Cell.point_in_base(point) do
+      {:ok, pose} ->
+        for field <- ~w(x y z rx ry rz), into: %{} do
+          {"base_" <> field, Map.fetch!(pose, String.to_existing_atom(field))}
+        end
+
+      {:error, _reason} ->
+        %{}
+    end
+  end
 
   defp pose_map(row) do
     for field <- ~w(x y z rx ry rz), into: %{} do

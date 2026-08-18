@@ -110,7 +110,7 @@ defmodule ExMo.Schema.Registry do
                 type: :boolean,
                 description: "Whether a running program may write this point"
               }
-            ]
+            ] ++ base_pose_fields()
       },
       "type.stored_tool" => %StructType{
         id: "type.stored_tool",
@@ -146,6 +146,29 @@ defmodule ExMo.Schema.Registry do
         ]
       }
     }
+  end
+
+  # Where the point is *now*, in the base, with its frame resolved through
+  # whatever the frame's parents currently say. Computed rather than stored, and
+  # published beside the stored pose rather than instead of it, because the two
+  # answer different questions: the stored numbers are what a person taught and
+  # stay true when the fixture moves, and these are where the arm would
+  # actually go if it were sent there this second.
+  defp base_pose_fields do
+    for {axis, label} <- [
+          {"x", "Position along base X, metres"},
+          {"y", "Position along base Y, metres"},
+          {"z", "Position along base Z, metres"},
+          {"rx", "Roll about base X, radians"},
+          {"ry", "Pitch about base Y, radians"},
+          {"rz", "Yaw about base Z, radians"}
+        ] do
+      %ResultField{
+        name: "base_" <> axis,
+        type: :double,
+        description: label <> ", with the point's frame resolved as it stands now"
+      }
+    end
   end
 
   defp stored_pose_fields do
