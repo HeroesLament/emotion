@@ -23,6 +23,34 @@ defmodule ExMove.JointState do
     %__MODULE__{positions: zeros, velocities: zeros, accelerations: zeros}
   end
 
+  @doc """
+  Reads where the arm actually is, in the chain's order.
+
+  One observation per joint, and no side effects — which is the difference
+  between this and the read inside `ExMove.CartesianStream`, which deliberately
+  fuses a drive-mode check into the same pass because it is about to command a
+  velocity. Teaching a point must not change what mode a drive is in.
+
+  `{:error, :unreadable}` rather than a partial answer: a pose assembled from
+  five joints and a guess is a pose the arm was never in, and it looks like a
+  plausible position rather than like a fault.
+  """
+  def read(%ExMove.Chain{axis_ids: axis_ids}) do
+    axis_ids
+    |> Enum.reduce_while({:ok, []}, fn axis_id, {:ok, acc} ->
+      case Exdrive.Drive.status(axis_id) do
+        %{actual_position: position} -> {:cont, {:ok, [position | acc]}}
+        _other -> {:halt, {:error, :unreadable}}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, from_positions(Enum.reverse(reversed))}
+      other -> other
+    end
+  catch
+    :exit, _reason -> {:error, :unreadable}
+  end
+
   @doc "Build from a positions list, zero velocities and accelerations"
   def from_positions(positions) when is_list(positions) do
     n = length(positions)

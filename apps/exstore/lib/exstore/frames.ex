@@ -65,16 +65,24 @@ defmodule ExStore.Frames do
   function.
   """
   def delete(%Frame{} = frame) do
-    if Repo.exists?(from(f in Frame, where: f.parent_id == ^frame.id)) do
-      changeset =
-        frame
-        |> Ecto.Changeset.change()
-        |> Ecto.Changeset.add_error(:id, "is a parent of another frame")
+    cond do
+      Repo.exists?(from(f in Frame, where: f.parent_id == ^frame.id)) ->
+        refuse(frame, "is a parent of another frame")
 
-      {:error, changeset}
-    else
-      Repo.delete(frame)
+      # And now the reason the restrict was there in the first place. A frame
+      # that can be deleted out from under a taught point is a point that
+      # silently means somewhere else — the pose is stored *in* the frame, so
+      # losing the frame does not orphan the point, it changes where it is.
+      Repo.exists?(from(p in ExStore.Cell.Point, where: p.frame_id == ^frame.id)) ->
+        refuse(frame, "still has points taught in it")
+
+      true ->
+        Repo.delete(frame)
     end
+  end
+
+  defp refuse(frame, message) do
+    {:error, frame |> Ecto.Changeset.change() |> Ecto.Changeset.add_error(:id, message)}
   end
 
   @doc """

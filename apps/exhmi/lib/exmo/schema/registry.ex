@@ -76,6 +76,42 @@ defmodule ExMo.Schema.Registry do
             }
           ]
       },
+      "type.stored_point" => %StructType{
+        id: "type.stored_point",
+        name: "StoredPoint",
+        description:
+          "A taught point: where the arm was, expressed in the frame it was " <>
+            "taught in, with the tool that was fitted and the joint solution " <>
+            "it was actually in.",
+        fields:
+          stored_pose_fields() ++
+            [
+              %ResultField{
+                name: "frame",
+                type: :string,
+                description: "The frame the pose is expressed in; `base` when it has none"
+              },
+              %ResultField{
+                name: "tool",
+                type: :string,
+                description:
+                  "The tool that was fitted when this was taught, or empty for a bare flange"
+              },
+              %ResultField{
+                name: "joints",
+                type: {:array, :double},
+                description:
+                  "The joint solution the arm was in, radians, base to tip. Replaying " <>
+                    "these is the one way to reach a taught pose that cannot arrive on " <>
+                    "the mirror-image configuration."
+              },
+              %ResultField{
+                name: "mutable",
+                type: :boolean,
+                description: "Whether a running program may write this point"
+              }
+            ]
+      },
       "type.stored_tool" => %StructType{
         id: "type.stored_tool",
         name: "StoredTool",
@@ -407,6 +443,9 @@ defmodule ExMo.Schema.Registry do
           type: :string,
           read_grant: :read_state
         },
+        teach_point(),
+        forget_point(),
+        list_points(),
         teach_frame(),
         forget_frame(),
         list_frames(),
@@ -438,6 +477,105 @@ defmodule ExMo.Schema.Registry do
         description: "#{String.capitalize(label)} of #{what}, #{unit}. Omitted is zero."
       }
     end
+  end
+
+  # Teaching is a capture, not an argument list. The client says what to call
+  # the place the arm is standing; the controller reads where that is. A method
+  # that took a pose would be a different thing entirely — offline programming
+  # — and would have no joint solution behind it, which is the part that makes
+  # a point replayable without flipping.
+  defp teach_point do
+    %Method{
+      id: "cell.teach_point",
+      name: "TeachPoint",
+      description:
+        "Records where the arm is now, under a name. The pose is stored in " <>
+          "the frame given, so re-teaching that frame moves this point with " <>
+          "it; the tool that is fitted is recorded alongside, because a pose " <>
+          "taught with one tool does not describe the same physical location " <>
+          "with another; and the joint solution the arm is actually in is " <>
+          "stored too, which is what lets a replay reach the pose on the " <>
+          "configuration it was taught on rather than the mirror of it.\n\n" <>
+          "Re-teaching an existing name moves the point. A position that was " <>
+          "taught slightly wrong and taught again is the same position.",
+      async: false,
+      call_grant: :write_setpoint,
+      input_args: [
+        %Argument{
+          name: "name",
+          type: :string,
+          required: true,
+          description: "Lowercase, starting with a letter"
+        },
+        %Argument{
+          name: "frame",
+          type: :string,
+          required: false,
+          default: "base",
+          description:
+            "The frame to express the pose in. Teach in the frame the work is " <>
+              "in, and re-teaching that frame after the fixture moves brings " <>
+              "every point taught in it along."
+        },
+        %Argument{
+          name: "mutable",
+          type: :boolean,
+          required: false,
+          default: false,
+          description:
+            "Whether a running program may write this point. A vision result " <>
+              "writes a mutable point; a taught approach position is not " <>
+              "writable by a program at all."
+        }
+      ],
+      output_args: [
+        %ResultField{name: "name", type: :string, description: "The point that was taught"},
+        %ResultField{
+          name: "frame",
+          type: :string,
+          description: "The frame it was expressed in"
+        },
+        %ResultField{
+          name: "tool",
+          type: :string,
+          description: "The tool that was fitted, or empty for a bare flange"
+        }
+      ]
+    }
+  end
+
+  defp forget_point do
+    %Method{
+      id: "cell.forget_point",
+      name: "ForgetPoint",
+      description: "Deletes a taught point.",
+      async: false,
+      call_grant: :write_setpoint,
+      input_args: [
+        %Argument{name: "name", type: :string, required: true, description: "The point to delete"}
+      ]
+    }
+  end
+
+  defp list_points do
+    %Method{
+      id: "cell.list_points",
+      name: "ListPoints",
+      description:
+        "Every taught point, with the frame and tool it was taught with and " <>
+          "the joint solution behind it. Poses are as stored — in their own " <>
+          "frame — because that is the number a person taught and the one " <>
+          "that stays true when the fixture moves.",
+      async: false,
+      call_grant: :read_state,
+      output_args: [
+        %ResultField{
+          name: "points",
+          type: {:array, {:ref, "type.stored_point"}},
+          description: "Taught points, by name"
+        }
+      ]
+    }
   end
 
   defp teach_frame do

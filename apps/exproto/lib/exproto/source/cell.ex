@@ -22,7 +22,8 @@ defmodule ExProto.Source.Cell do
 
   alias ExMo.Cell
   alias ExMove.CartesianStream
-  alias ExStore.{Frames, Tools}
+  alias ExStore.Cell.Point
+  alias ExStore.{Frames, Points, Tools}
 
   @impl ExProto.Source
   def read("cell.tool", _arg), do: {:ok, Cell.tool_name() || ""}
@@ -39,6 +40,63 @@ defmodule ExProto.Source.Cell do
   def write(_node_id, _value, _arg), do: {:error, :not_writable}
 
   @impl ExProto.Source
+  # Gated on `write_setpoint` rather than `write_configuration`, and the
+  # difference is deliberate: teaching a point is what an operator does with a
+  # pendant in their hand, all day, and it is the same grant that lets them
+  # move the arm there in the first place. Frames and tools are configuration;
+  # points are work.
+  def call("cell.teach_point", args, _arg) do
+    with {:ok, name} <- name(args) do
+      frame = Map.get(args, "frame") || "base"
+      mutable = Map.get(args, "mutable") == true
+
+      case Cell.teach_point(name, frame: frame, mutable: mutable) do
+        {:ok, point} ->
+          {:ok,
+           %{
+             "name" => point.name,
+             "frame" => Cell.point_frame_name(point),
+             "tool" => Cell.point_tool_name(point) || ""
+           }}
+
+        {:error, _reason} ->
+          {:error, :rejected}
+      end
+    end
+  end
+
+  def call("cell.forget_point", args, _arg) do
+    with {:ok, name} <- name(args) do
+      case Points.by_name(name) do
+        nil ->
+          {:error, :rejected}
+
+        point ->
+          case Points.delete(point) do
+            {:ok, _} -> :ok
+            {:error, _changeset} -> {:error, :rejected}
+          end
+      end
+    end
+  end
+
+  def call("cell.list_points", _args, _arg) do
+    points =
+      for point <- Points.list() do
+        point
+        |> pose_map()
+        |> Map.merge(%{
+          "name" => point.name,
+          "frame" => Cell.point_frame_name(point),
+          "tool" => Cell.point_tool_name(point) || "",
+          "joints" => Point.joints(point),
+          "mutable" => point.mutable
+        })
+      end
+
+    {:ok, %{"points" => points}}
+  end
+
   def call("cell.teach_frame", args, _arg) do
     with {:ok, name} <- name(args),
          {:ok, parent_id} <- parent_id(args) do

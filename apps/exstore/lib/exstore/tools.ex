@@ -32,7 +32,25 @@ defmodule ExStore.Tools do
     |> Repo.update()
   end
 
-  def delete(%Tool{} = tool), do: Repo.delete(tool)
+  @doc """
+  Deletes a tool, unless something was taught with it fitted.
+
+  A point records which tool was fitted so that replaying it under a different
+  one can be caught. Deleting the tool would delete the evidence, leaving a
+  point that looks like it was taught on a bare flange.
+  """
+  def delete(%Tool{} = tool) do
+    if Repo.exists?(from(p in ExStore.Cell.Point, where: p.tool_id == ^tool.id)) do
+      changeset =
+        tool
+        |> Ecto.Changeset.change()
+        |> Ecto.Changeset.add_error(:id, "was fitted when a point was taught")
+
+      {:error, changeset}
+    else
+      Repo.delete(tool)
+    end
+  end
 
   @doc """
   The fitted tool, or `nil` for a bare flange.

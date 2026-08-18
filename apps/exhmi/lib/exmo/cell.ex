@@ -24,8 +24,9 @@ defmodule ExMo.Cell do
   """
 
   alias ExMo.Schema.Registry
-  alias ExMove.{FK, Frame}
-  alias ExStore.{Frames, Tools}
+  alias ExMove.{FK, Frame, JointState}
+  alias ExStore.Cell.Point
+  alias ExStore.{Frames, Points, Robots, Tools}
 
   @doc """
   The kinematic chain with the fitted tool on it.
@@ -117,6 +118,138 @@ defmodule ExMo.Cell do
 
   def pose_in_frame(name, %Frame{} = pose) when is_binary(name) do
     with {:ok, frame} <- resolve(name), do: {:ok, FK.express_in(frame, pose)}
+  end
+
+  # ── Points ────────────────────────────────────────────────────────────────
+
+  @doc """
+  Records where the arm is now as a named point.
+
+  Everything that makes a point replayable is captured in one read, and that is
+  the reason this is a function here rather than a few calls at a call site:
+  the pose, the joint solution behind it, the frame it is expressed in and the
+  tool that was fitted have to describe the *same instant*. Assembled from
+  separate reads while somebody is hand-guiding the arm, they describe a
+  machine that was never in any one of those states.
+
+  The pose is stored in the frame, which is what makes re-teaching the frame
+  move the point.
+  """
+  def teach_point(name, opts \\ []) do
+    frame_name = Keyword.get(opts, :frame, "base")
+    chain = chain()
+
+    with {:ok, robot} <- loaded_robot(),
+         {:ok, %JointState{} = js} <- JointState.read(chain),
+         {:ok, in_frame} <- pose_in_frame(frame_name, FK.solve(chain, js)),
+         {:ok, frame_id} <- frame_id(frame_name) do
+      Points.teach(%{
+        name: name,
+        robot_id: robot.id,
+        frame_id: frame_id,
+        tool_id: fitted_tool_id(),
+        x: in_frame.x,
+        y: in_frame.y,
+        z: in_frame.z,
+        rx: in_frame.rx,
+        ry: in_frame.ry,
+        rz: in_frame.rz,
+        joints: js.positions,
+        mutable: Keyword.get(opts, :mutable, false)
+      })
+    end
+  end
+
+  @doc """
+  Where a point is now, in the base.
+
+  "Now" is the operative word and the reason this is computed rather than
+  stored: the answer changes when the frame the point was taught in is
+  re-taught, which is the entire purpose of having frames.
+  """
+  def point_in_base(%Point{} = point) do
+    case point.frame_id do
+      nil ->
+        {:ok, pose_of(point)}
+
+      frame_id ->
+        # Through `resolve/1`, which composes the frame's parents, rather than
+        # the frame's own six numbers. Composing only those worked perfectly
+        # for a flat frame and put a point taught in a jig on a table wherever
+        # the jig would be if the table were at the origin — a pose that is
+        # wrong and entirely plausible. Found by the test for re-teaching a
+        # parent, which is the only shape that can tell the two apart.
+        case Frames.get(frame_id) do
+          nil ->
+            {:error, :unknown_frame}
+
+          frame ->
+            with {:ok, resolved} <- resolve(frame.name) do
+              {:ok, FK.compose(resolved, pose_of(point))}
+            end
+        end
+    end
+  end
+
+  @doc """
+  Whether the tool fitted now is the tool that was fitted when this was taught.
+
+  Not a formality. A pose taught with one tool does not describe the same
+  physical location with another, so replaying a point under a different tool
+  sends the arm somewhere nobody taught — and the failure is silent, because
+  every number involved is perfectly valid.
+  """
+  def tool_matches?(%Point{tool_id: taught}), do: taught == fitted_tool_id()
+
+  @doc "The name of the tool a point was taught with, or `nil` for a bare flange."
+  def point_tool_name(%Point{tool_id: nil}), do: nil
+
+  def point_tool_name(%Point{tool_id: tool_id}) do
+    case Tools.get(tool_id) do
+      nil -> nil
+      tool -> tool.name
+    end
+  end
+
+  @doc "The name of the frame a point was taught in. `\"base\"` when it has none."
+  def point_frame_name(%Point{frame_id: nil}), do: "base"
+
+  def point_frame_name(%Point{frame_id: frame_id}) do
+    case Frames.get(frame_id) do
+      nil -> "base"
+      frame -> frame.name
+    end
+  end
+
+  defp pose_of(point) do
+    %Frame{x: point.x, y: point.y, z: point.z, rx: point.rx, ry: point.ry, rz: point.rz}
+  end
+
+  defp fitted_tool_id do
+    case Tools.fitted() do
+      nil -> nil
+      tool -> tool.id
+    end
+  end
+
+  defp frame_id("base"), do: {:ok, nil}
+
+  defp frame_id(name) do
+    case Frames.by_name(name) do
+      nil -> {:error, :unknown_frame}
+      frame -> {:ok, frame.id}
+    end
+  end
+
+  # A point belongs to the arm it was taught on, and this controller has one.
+  # With nothing commissioned there is nothing to attribute a joint vector to,
+  # and inventing a robot row to hang it off would be storing a point that
+  # cannot be replayed.
+  defp loaded_robot do
+    case Robots.active() do
+      nil -> {:error, :no_robot}
+      robot -> {:ok, robot}
+    end
   end
 
   defp to_frame(%{x: x, y: y, z: z, rx: rx, ry: ry, rz: rz}) do
