@@ -255,7 +255,7 @@ A program is a sequence of **statements**, and a statement is a record: a kind,
 and typed arguments. Drag-and-drop editing is the primary way they are authored,
 which settles a question this document previously left open — you cannot
 drag-and-drop text, so the structure is authoritative and any text form is a
-rendering of it. See §7.
+rendering of it. See §8.
 
 The starting kinds, deliberately few:
 
@@ -365,7 +365,115 @@ statement it is on, its fault — and the body itself is uploaded and downloaded
 over HTTP as a canonical serialisation. A program of a thousand statements does
 not belong in a JSON-RPC frame competing with a 30 Hz position stream.
 
-## 5. The parallel logic context
+## 5. Execution
+
+A program that cannot run is a document. This section is the engine, and it is
+mostly a set of decisions about *when* things happen rather than about how.
+
+### The two pointers, and why V1 has one and a half
+
+To blend one move into the next the queue has to be fed before the arm arrives,
+which means the interpreter runs ahead of the machine. The instant it does there
+are two positions in a program — where the interpreter is and where the arm is —
+and a `wait` executed at the interpreter's position happens *before the arm gets
+to the line above it*.
+
+Every vendor met this and each exposed it: KUKA has an advance-run pointer and
+`$ADVANCE` to bound it, FANUC documents which instructions stop look-ahead, ABB
+drains the queue at particular statements. It is not an implementation detail —
+"when does this line actually happen" is a semantic every program ever written
+against the controller depends on, which makes it the most expensive thing in
+this document to change later.
+
+**V1: motion statements look ahead, everything else is a barrier.** The executor
+keeps a bounded number of motion statements in the queue, so blending works
+between consecutive moves exactly as `CARTESIAN.md` built it. Any statement that
+is not motion — `wait` now, `set` and branching later — stops the interpreter
+until the arm has caught up and the queue is empty.
+
+That buys the property people actually expect: blending happens between moves and
+nowhere surprising, and `wait 2 seconds` means the arm stands still for two
+seconds rather than two seconds beginning somewhere earlier. The full two-pointer
+model stays available later; going the other way — quietly making every
+non-motion statement's timing something the programmer must reason about — would
+break programs that already exist.
+
+### One run, and it is a process
+
+One program runs at a time. Not a limitation to be lifted casually: a second
+concurrent program means two things commanding one arm, and the honest version of
+that is coordinated motion across motion groups, which this build does not have.
+A second `start` is refused while one is running rather than queued.
+
+A run is a supervised process, and its death is a stop. The stream is released on
+the way out, which commands zero on every joint — the same path a dropped client
+takes, tested since the jog watchdog landed. A program that crashes must not
+leave an arm moving, and on the BEAM that is a `terminate` rather than a promise.
+
+**Nothing about a run depends on a client.** That is the property that separates
+a controller from a document, and it is worth one test of its own: start a
+program, disconnect the only client, and assert it finishes.
+
+### The states, and what moves between them
+
+    idle      no run
+    running   the interpreter is advancing
+    held      stopped where it was, resumable
+    faulted   a statement was refused; stopped, not resumable
+    done      the last statement completed
+
+`hold` stops the arm immediately by releasing the stream. `resume` **re-issues
+the statement the run was on, from wherever the arm is standing** — which for a
+linear move is exactly the remainder of the original line, because resolved-rate
+motion is differential and the target is absolute. It is not exact for an arc: the
+via point may be behind the arm, and a circle recomputed through a via already
+passed is a different path. So **resume during an arc is refused**, naming the
+statement, and the operator restarts it. Fast where it can be exact, loud where it
+cannot.
+
+`stop` abandons the run. There is no resume from a stop; the next run starts at
+the top, or at a statement somebody chose.
+
+`step` runs exactly one statement and returns to `held`. Every pendant has it and
+it costs nothing here, because the interpreter is already a state machine driven
+one statement at a time.
+
+A statement that is refused — a singularity, a joint limit, an unreachable point —
+**faults the run and stops**. It does not skip and it does not retry. The refusal
+the queue already produces is the reason the run stopped, and it is published as
+such rather than translated.
+
+### The mode interlock, in its second direction
+
+Already stated in §4 and repeated here because this is the half that enforces it:
+a program is refused in manual, exactly as a jog is refused in auto. Turning the
+selector out of auto while a program is running **stops the program**, in the same
+way it already releases every jog hold.
+
+### The tool a point was taught with
+
+Decided, having been left open when points landed: **a move to a point taught
+with a tool other than the one fitted is refused**, and the refusal names both
+tools. A statement may carry an explicit opt-in for the cases where somebody
+genuinely means it — a probe that works with anything bolted on.
+
+Recomputing the pose through the fitted tool was the alternative and it is the
+more dangerous kind of convenient: it drives the arm at a location it was never
+taught to reach with that tool, and the first time a longer tool cannot get there
+the same way, it will try. Refusing is annoying exactly once per changeover
+nobody told the controller about, and the annoyance is the feature.
+
+### What a pendant can see
+
+The run publishes, as ordinary model nodes: its program, its state, the index of
+the statement it is on, the reason it faulted, and the number of statements. That
+is what a pendant highlights a line with, and it is subscribable like everything
+else, so a client watching a program run receives the line changing rather than
+polling for it.
+
+The program *body* stays off the RPC link, per §4.
+
+## 6. The parallel logic context
 
 Every incumbent has one. We should not build a ladder editor, and we should not
 assume the motion program owns the machine either — because that assumption is
@@ -378,7 +486,7 @@ What matters now is only that the program model does not assume it is the sole
 executing context: nothing may claim the arm implicitly, and holds stay the way
 motion is claimed.
 
-## 6. G-code is an importer
+## 7. G-code is an importer
 
 G-code is the CAM lineage: it streams coordinates, with no named points, no
 frames, no per-line termination and no logic. Every vendor supports it as an
@@ -391,7 +499,7 @@ every limit and every report that `CARTESIAN.md` spent its length establishing.
 
 Behaviours are not in this section any more. They are layer 3 of §4.
 
-## 7. Storage, and the text question resolved
+## 8. Storage, and the text question resolved
 
 **One controller database.** Frames, tools, points, programs and registered
 extensions join accounts and tokens in the existing repo. One file to back up — and `backup`
@@ -498,7 +606,7 @@ Migration runs the same way round. Structure to text later is a printer over the
 whole corpus and cannot fail; text to structure later is a parser over programs
 people have hand-edited for years, some of which will not parse.
 
-## 8. Studio
+## 9. Studio
 
 **Blocks are day one and primary.** A block editor is a tree editor, which is
 what a widget toolkit is good at, and Cedar exists.
@@ -507,7 +615,7 @@ what a widget toolkit is good at, and Cedar exists.
 the joint vector. Cobot-style hand guiding is the same operation with a different
 input device.
 
-**Text is third and is an export**, per §7.
+**Text is third and is an export**, per §8.
 
 **The Elixir SDK is a build-and-deploy loop, not a text editor.** Studio
 scaffolds an extension project, builds it, deploys it to a controller, runs it
@@ -526,7 +634,7 @@ If an in-app editor is wanted later, it is for **extensions only, never for
 programs**, and it comes after blocks. It is an IDE feature that happens to live
 in a robot tool and should be scheduled as one.
 
-## 9. How we would know it is finished
+## 10. How we would know it is finished
 
 The tests are the specification, and the first one is the one that makes frames
 worth having:
@@ -550,6 +658,15 @@ worth having:
   * **A program runs with nobody watching.** Start it, disconnect the only
     client, assert it completes. This is the property that distinguishes a stored
     program from a document and it cannot be tested by accident.
+  * **A held program resumes on the line it was on**, and finishes where it would
+    have. The linear case, where re-issuing is exact.
+  * **Resume during an arc is refused**, naming the statement, rather than
+    silently drawing a different circle.
+  * **A `wait` waits where the program says it does.** Two moves either side of a
+    `wait 1 second`, and the arm is standing on the first move's end point for
+    that second — the assertion that the look-ahead barrier is real.
+  * **A run that crashes leaves an arm that is not moving.** Kill the process
+    mid-move and assert every joint is commanded zero.
   * **A program is refused in manual, a jog is refused in auto.** Both directions,
     because an interlock tested in one direction is half an interlock.
   * **A blended two-line program does not stop at the corner.** Already true at
@@ -587,7 +704,7 @@ worth having:
 ## Open questions
 
 - **Where the arm's own geometry lives**, which the `tools` table forces. Gap 1
-  in §7 and the largest thing still unanswered in this document.
+  in §8 and the largest thing still unanswered in this document.
 - **What happens when a point is replayed under the wrong tool** — refuse, or
   recompute the pose through the new tool and go there. Refusing is safe and
   annoying; recomputing is convenient and can move the arm somewhere nobody
