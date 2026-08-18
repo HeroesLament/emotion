@@ -26,6 +26,13 @@ defmodule ExProto.Source.Cell do
 
   @impl ExProto.Source
   def read("cell.tool", _arg), do: {:ok, Cell.tool_name() || ""}
+
+  # From the loaded chain rather than from the store, deliberately. What this
+  # node reports is what the controller is *running*, and after somebody stores
+  # and activates a different description those two answers differ until the
+  # restart. Reporting the stored one would have a pendant show an arm the
+  # controller is not driving.
+  def read("cell.robot", _arg), do: {:ok, to_string(Cell.chain().name)}
   def read(_unknown, _arg), do: {:error, :unknown_node}
 
   @impl ExProto.Source

@@ -1,22 +1,20 @@
 defmodule ExMove.Library do
   @moduledoc """
-  Kinematic chains this build knows about, by name.
+  A chain in code, for tests.
 
-  A chain is machine configuration and a library is an odd place to keep it.
-  It is here because it is the only place both consumers can reach: the Studio
-  path-depends on `exmove` and deliberately not on `exhmi` — a desktop
-  application should not have to ship an OPC UA server and a database in order
-  to draw an arm — and the controller reaches it through `exhmi`, which builds
-  the Information Model from the same description.
+  This used to be where the controller and the Studio both got the arm from,
+  and its own docstring said it would go away when the URDF loader landed. It
+  has: the controller reads a URDF the machine was commissioned with, through
+  `ExMo.Cell.Loaded`.
 
-  The alternative was a copy on each side, and a second description of a
-  machine's kinematics is one that agrees with the first right up until
-  somebody edits one of them. When the arm's forearm is 20mm longer than the
-  controller believes it is, what fails is a tool centre point that reads
-  plausibly and is wrong.
+  What is left is a fixture. A chain built in code cannot fail to parse, which
+  is exactly what you want underneath a test of something else — a Jacobian, a
+  limit, a viewport — and exactly what you do not want underneath a machine,
+  where the arm's dimensions should be a thing somebody measured rather than a
+  thing somebody typed.
 
-  This goes away when the URDF loader lands and a chain is something a machine
-  is configured with rather than something a build is compiled with.
+  Nothing on the controller path calls this. If something starts to, that is
+  the third description growing back.
   """
 
   alias ExMove.{Chain, Joint}
@@ -29,10 +27,10 @@ defmodule ExMove.Library do
   A six-axis arm, dimensioned in metres like everything else.
 
   Roughly the proportions of a small industrial arm: a shoulder, a long upper
-  arm, a forearm, and a three-axis wrist. Built in code rather than loaded from
-  a URDF because the loader is not written yet, and because a chain that cannot
-  fail to parse is a better thing to be looking at while the viewport is the
-  part under test.
+  arm, a forearm, and a three-axis wrist. Invented, and deliberately not the
+  Arctos — a fixture that happened to match a real machine would be a fourth
+  description of it, and the point of a fixture is that nothing depends on the
+  numbers being true.
   """
   @spec demo() :: Chain.t()
   def demo do

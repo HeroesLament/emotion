@@ -395,6 +395,18 @@ defmodule ExMo.Schema.Registry do
           type: :string,
           read_grant: :read_state
         },
+        %Property{
+          id: "cell.robot",
+          name: "Robot",
+          description:
+            "The name of the robot description this controller was " <>
+              "commissioned with, and is running now. Loading a different one " <>
+              "takes a restart: the axis nodes above come from this chain, so " <>
+              "changing it changes the shape of the address space — which is " <>
+              "why this is read-only where a fitted tool is a method.",
+          type: :string,
+          read_grant: :read_state
+        },
         teach_frame(),
         forget_frame(),
         list_frames(),
