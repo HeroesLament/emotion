@@ -401,6 +401,42 @@ defmodule ExMove.CartesianStreamTest do
       assert distance(in_base, in_user) < 1.0e-3
     end
 
+    test "a stream that has arrived takes another move and ticks again", ctx do
+      # The path a program walks and a jog never does: arrive, then be handed
+      # the next move. The timer had been stopped on arrival, and the guard that
+      # was supposed to restart it could not fire, so the stream sat on the new
+      # motion for ever — idle, with work in hand.
+      %{chain: chain} = ctx
+      extend(ctx, @across)
+      start = tcp(chain)
+
+      :ok =
+        CartesianStream.move_linear(chain, %ExMove.Frame{start | z: start.z + 0.01},
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05
+        )
+
+      run(ctx, 200, 1.5)
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+
+      :ok =
+        CartesianStream.move_linear(chain, %ExMove.Frame{start | z: start.z + 0.02},
+          clock: :external,
+          hz: 200,
+          feedrate: 0.05
+        )
+
+      # One tick is enough to prove the stream is alive again; the assertion is
+      # that it left `{:done, :reached}` at all.
+      step(ctx, 200)
+      refute CartesianStream.status(chain.name) == {:done, :reached}
+
+      run(ctx, 200, 1.5)
+      assert CartesianStream.status(chain.name) == {:done, :reached}
+      assert_in_delta tcp(chain).z, start.z + 0.02, 2.0e-3
+    end
+
     test "an unknown frame is refused rather than treated as base", ctx do
       %{chain: chain, axis_ids: axis_ids} = ctx
 

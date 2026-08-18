@@ -39,7 +39,27 @@ defmodule ExStore.Points do
     end
   end
 
-  def delete(%Point{} = point), do: Repo.delete(point)
+  @doc """
+  Deletes a point, unless a program still moves to it.
+
+  Asked as a query rather than caught as a constraint, for the reason measured
+  when frames landed: SQLite reports a foreign key violation as bare text with
+  no constraint name in it, so `foreign_key_constraint/3` has nothing to match
+  and the violation raises instead of becoming an error. The restrict stays in
+  the migration as the backstop.
+  """
+  def delete(%Point{} = point) do
+    if Repo.exists?(from(r in ExStore.Program.StatementRef, where: r.point_id == ^point.id)) do
+      changeset =
+        point
+        |> Ecto.Changeset.change()
+        |> Ecto.Changeset.add_error(:id, "is used by a program")
+
+      {:error, changeset}
+    else
+      Repo.delete(point)
+    end
+  end
 
   # A joint vector of the wrong length is a point taught on another arm, and
   # the only place to notice is here — six numbers replayed on a seven-axis

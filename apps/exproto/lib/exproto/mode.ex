@@ -94,6 +94,25 @@ defmodule ExProto.Mode do
     end
   end
 
+  @doc """
+  Whether a stored program may run right now.
+
+  The other half of the same interlock, and deliberately the mirror image:
+
+      manual   jog permitted        program refused
+      auto     jog refused          program permitted
+
+  Which is how all four vendors work. An operator hand-jogging an arm that is
+  running a program, and a program moving an arm somebody is standing next to
+  with a pendant, are the same accident approached from two directions.
+  """
+  def allows_program?(server \\ __MODULE__) do
+    case selected(server) do
+      :auto -> :ok
+      other -> {:error, {:wrong_mode, other}}
+    end
+  end
+
   # ── Server ────────────────────────────────────────────────────────────────
 
   @impl GenServer
@@ -105,8 +124,21 @@ defmodule ExProto.Mode do
     {:ok,
      %{
        position: Keyword.get(opts, :position, :manual),
-       jog: Keyword.get(opts, :jog, ExProto.Jog)
+       jog: Keyword.get(opts, :jog, ExProto.Jog),
+       run: Keyword.get(opts, :run, ExProto.Program.Run)
      }}
+  end
+
+  # Cast, not call, and the reason is a deadlock this found: the run asks Mode
+  # whether it may still be running, on every statement, from inside its own
+  # message loop. A synchronous stop from here would wait on a process that is
+  # waiting on this one. The run may also not exist at all — a controller with
+  # no program engine is a perfectly good controller — so this is best-effort in
+  # both directions.
+  defp stop_program(server) do
+    ExProto.Program.Run.stop_async(server)
+  catch
+    :exit, _reason -> :ok
   end
 
   @impl GenServer
@@ -122,6 +154,11 @@ defmodule ExProto.Mode do
     Logger.info("controller mode: #{state.position} → #{position} — releasing every hold")
 
     ExProto.Jog.release_all(state.jog)
+
+    # And a running program is a hold of a different shape. Turning the key out
+    # of auto stops it, for the same reason turning it out of manual stops a jog:
+    # the selector is the one place that says what this machine is currently for.
+    stop_program(state.run)
 
     {:reply, :ok, %{state | position: position}}
   end

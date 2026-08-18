@@ -477,16 +477,24 @@ defmodule ExMove.CartesianStream do
   def handle_call(:queued, _from, state), do: {:reply, length(state.queue), state}
 
   def handle_call({:enqueue, motion}, _from, state) do
+    # Asked *before* the state is rewritten, and that is the whole fix. This used
+    # to hand the already-updated state to `restart_if_idle/1`, whose only clause
+    # matches `{:done, _}` — and the line above had just replaced that status
+    # with `:idle`. So the guard could never fire: a stream that had arrived and
+    # stopped its timer took the next move, sat on it, and never ticked again.
+    #
+    # Every queue test passed, because they all enqueue behind a *running*
+    # motion. The dead path is a finished stream being given another move, which
+    # is exactly and only what a program does — found by running one.
+    finished? = match?({:done, _reason}, state.status)
+
     state =
       case state.motion do
         nil -> %{state | motion: motion, status: :idle}
         _running -> %{state | queue: state.queue ++ [motion]}
       end
 
-    # A finished stream that is handed another move starts ticking again. It
-    # stopped its timer on arrival, so without this the queue would fill up and
-    # nothing would ever look at it.
-    {:reply, :ok, restart_if_idle(state)}
+    {:reply, :ok, if(finished?, do: schedule(state), else: state)}
   end
 
   @impl true
@@ -1058,16 +1066,6 @@ defmodule ExMove.CartesianStream do
   catch
     :exit, _reason -> {:error, :not_enabled}
   end
-
-  # A stream that stopped its timer on arrival needs it back when work arrives.
-  # Only ever from `{:done, _}`: restarting a timer that is already running would
-  # double the tick rate, which is the sort of bug that reads as "the arm is
-  # twice as fast now" and takes an afternoon.
-  defp restart_if_idle(%{status: {:done, _reason}} = state) do
-    schedule(%{state | status: :idle})
-  end
-
-  defp restart_if_idle(state), do: state
 
   defp schedule(%{clock: :external} = state), do: state
 
