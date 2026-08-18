@@ -14,6 +14,7 @@ contract inside one of them would quietly make that one authoritative.
 | `DESIGN.md`                      | Drive layer, CiA 402, FOC, and the force path |
 | `CARTESIAN.md`                   | Cartesian motion: the stream, limits, frames, moves |
 | `PROGRAMS.md`                    | Programs, taught points, user frames, swappable tools, and where code lives |
+| `ROBOT.md`                       | The kinematic chain, URDF, and what commissioning owns instead |
 
 ## The stack
 
