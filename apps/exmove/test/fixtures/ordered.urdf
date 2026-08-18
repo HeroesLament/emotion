@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<robot name="ordered">
+  <link name="base_link"/>
+  <link name="upper"/>
+  <link name="fore"/>
+  <link name="wrist"/>
+
+  <joint name="shoulder" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.2"/>
+    <parent link="base_link"/>
+    <child link="upper"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.0" upper="3.0" velocity="1.0" effort="100"/>
+  </joint>
+
+  <joint name="elbow" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.4"/>
+    <parent link="upper"/>
+    <child link="fore"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-2.0" upper="2.0" velocity="1.5" effort="100"/>
+  </joint>
+
+  <joint name="wrist_1" type="continuous">
+    <origin rpy="0 0 0" xyz="0 0 0.3"/>
+    <parent link="fore"/>
+    <child link="wrist"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+</robot>

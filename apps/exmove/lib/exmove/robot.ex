@@ -91,7 +91,11 @@ defmodule ExMove.Robot do
     chain = case Keyword.fetch!(opts, :chain) do
       name when is_atom(name) ->
         {:ok, c} = URDF.load(name)
-        c
+        # The loader no longer invents axis ids, so the caller says what the
+        # wiring is. This one has always assumed :j1..:jn in chain order, and
+        # saying so here is the difference between an assumption and a default
+        # buried in a parser.
+        Chain.wire(c, for(i <- 1..length(c.joints), do: :"j#{i}"))
       %Chain{} = c ->
         c
     end

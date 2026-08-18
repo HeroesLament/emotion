@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!-- One actuated joint, a fixed joint in the middle of the chain, and a fixed
+     flange at the end. The middle one has to fold into the joint after it; the
+     trailing one has to become the flange. -->
+<robot name="flanged">
+  <link name="base_link"/>
+  <link name="riser"/>
+  <link name="upper"/>
+  <link name="tool0"/>
+
+  <joint name="pedestal" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.1"/>
+    <parent link="base_link"/>
+    <child link="riser"/>
+  </joint>
+
+  <joint name="shoulder" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.2"/>
+    <parent link="riser"/>
+    <child link="upper"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.0" upper="3.0"/>
+  </joint>
+
+  <joint name="flange" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0.05"/>
+    <parent link="upper"/>
+    <child link="tool0"/>
+  </joint>
+</robot>

@@ -26,6 +26,13 @@ defmodule Exmove.MixProject do
       {:exdrive, in_umbrella: true},
       {:exdash, in_umbrella: true},
       {:rustler, "~> 0.37"},
+
+      # XML, for URDF. Pure Elixir and no NIF, so it cross-compiles to a Nerves
+      # target without argument. The loader this replaced was regex-over-XML,
+      # which is defensible for a file we wrote and a liability for one a
+      # customer exports: comments, namespace prefixes, entities and attribute
+      # order are all things a CAD tool emits and a regex mis-reads silently.
+      {:saxy, "~> 1.5"},
     ]
   end
 

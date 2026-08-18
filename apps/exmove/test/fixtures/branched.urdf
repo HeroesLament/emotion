@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<robot name="branched">
+  <link name="base_link"/>
+  <link name="torso"/>
+  <link name="left"/>
+  <link name="right"/>
+
+  <joint name="waist" type="revolute">
+    <origin rpy="0 0 0" xyz="0 0 0.2"/>
+    <parent link="base_link"/>
+    <child link="torso"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.0" upper="3.0"/>
+  </joint>
+
+  <joint name="left_shoulder" type="revolute">
+    <origin rpy="0 0 0" xyz="0.2 0 0.4"/>
+    <parent link="torso"/>
+    <child link="left"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.0" upper="3.0"/>
+  </joint>
+
+  <joint name="right_shoulder" type="revolute">
+    <origin rpy="0 0 0" xyz="-0.2 0 0.4"/>
+    <parent link="torso"/>
+    <child link="right"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-3.0" upper="3.0"/>
+  </joint>
+</robot>
