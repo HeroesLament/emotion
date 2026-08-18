@@ -34,13 +34,20 @@ defmodule ExMove.JointState do
   `{:error, :unreadable}` rather than a partial answer: a pose assembled from
   five joints and a guess is a pose the arm was never in, and it looks like a
   plausible position rather than like a fault.
+
+  For the same reason it reads the JOINT position rather than the drive's
+  accumulator, and refuses `{:error, {:unreferenced, axis_id}}` when an axis
+  does not know where it is. An unreferenced axis still has an accumulator —
+  jogging needs it — but it does not have an angle anybody may build a pose
+  from. See `ExMove.Mastering`.
   """
   def read(%ExMove.Chain{axis_ids: axis_ids}) do
     axis_ids
     |> Enum.reduce_while({:ok, []}, fn axis_id, {:ok, acc} ->
-      case Exdrive.Drive.status(axis_id) do
-        %{actual_position: position} -> {:cont, {:ok, [position | acc]}}
-        _other -> {:halt, {:error, :unreadable}}
+      case ExMove.Mastering.read_axis(axis_id) do
+        {:ok, position, _status} -> {:cont, {:ok, [position | acc]}}
+        {:error, {:unreadable, _axis}} -> {:halt, {:error, :unreadable}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
     |> case do

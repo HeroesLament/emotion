@@ -115,6 +115,40 @@ defmodule ExProto.Controller do
     end)
 
     Logger.info("E-Motion controller: #{length(axes)} axes running — #{Enum.join(axes, ", ")}")
+    audit_mastering()
     :ok
+  end
+
+  # Write down what the fleet says, and say out loud what changed.
+  #
+  # This is the only place a re-mastered axis can be caught. Everything else
+  # about such a cell looks fine — every joint reports a plausible angle, every
+  # move executes cleanly — and the work lands somewhere other than where it
+  # was taught. A log line is the minimum; an operator confirmation before the
+  # first program runs is the eventual answer.
+  defp audit_mastering do
+    case ExMo.Cell.audit_mastering() do
+      {:ok, []} ->
+        :ok
+
+      {:ok, findings} ->
+        Enum.each(findings, fn
+          {:changed, axis, was, now} ->
+            Logger.warning(
+              "mastering CHANGED on #{axis}: #{was} -> #{now} rad. " <>
+                "Every point taught on this robot has moved by the difference."
+            )
+
+          {:lost, axis, was} ->
+            Logger.warning("mastering LOST on #{axis} (was #{was} rad) — a replaced board?")
+
+          {:new, axis, now} ->
+            Logger.info("mastering recorded for #{axis}: #{now} rad")
+        end)
+    end
+  rescue
+    # A controller that will not start because its shadow table is unhappy is
+    # worse than one that starts without the audit. Say so and carry on.
+    error -> Logger.error("mastering audit skipped: #{inspect(error)}")
   end
 end

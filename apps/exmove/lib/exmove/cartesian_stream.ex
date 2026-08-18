@@ -157,7 +157,16 @@ defmodule ExMove.CartesianStream do
   one. Refresh is a cast: at 10 Hz into a process that must not miss its tick,
   there is nothing useful for the caller to do with a reply.
   """
+  # Admission, not discovery. The tick already refuses to read an axis that
+  # does not know where it is, but by then the caller has been told :ok and the
+  # refusal shows up as a stream that quietly never moves. A Cartesian command
+  # is exactly the thing an unreferenced joint must not be part of, so say so
+  # to the caller, naming the joints. See ExMove.Mastering.
   def hold(%Chain{} = chain, twist, opts \\ []) when length(twist) == 6 do
+    with :ok <- ExMove.Mastering.check(chain), do: do_hold(chain, twist, opts)
+  end
+
+  defp do_hold(%Chain{} = chain, twist, opts) do
     frame = Keyword.get(opts, :frame, :base)
 
     case whereis(chain.name) do
@@ -259,7 +268,13 @@ defmodule ExMove.CartesianStream do
   # Appended, not substituted. A controller that dropped the move it was running
   # whenever a new one arrived would make a two-line program depend on how fast
   # the client sent it.
+  # Both `move_linear/3` and `move_arc/4` land here, so the mastering check
+  # lives here too rather than being written twice and drifting once.
   defp enqueue(chain, motion, opts) do
+    with :ok <- ExMove.Mastering.check(chain), do: do_enqueue(chain, motion, opts)
+  end
+
+  defp do_enqueue(chain, motion, opts) do
     case whereis(chain.name) do
       nil ->
         opts =
@@ -1020,15 +1035,22 @@ defmodule ExMove.CartesianStream do
   # from joints read at six different instants is a pose the arm was never in,
   # and on a moving arm the error looks like a plausible position rather than
   # like a fault.
+  # Cartesian motion is where an unreferenced axis does the most damage: the
+  # solver will happily produce a joint vector from a pose built on a guess,
+  # and every number downstream of it looks reasonable. So the refusal lives
+  # here rather than at the caller, alongside the read it depends on.
   defp joint_positions(chain) do
     Enum.reduce_while(chain.axis_ids, {:ok, []}, fn axis_id, {:ok, acc} ->
-      case Exdrive.Drive.status(axis_id) do
-        %{actual_position: position} = status ->
+      case ExMove.Mastering.read_axis(axis_id) do
+        {:ok, position, status} ->
           ensure_velocity_mode(axis_id, status)
           {:cont, {:ok, [position | acc]}}
 
-        _other ->
+        {:error, {:unreadable, _axis}} ->
           {:halt, {:error, :unreadable}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
       end
     end)
     |> case do

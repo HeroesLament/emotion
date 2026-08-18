@@ -34,6 +34,8 @@ defmodule ExProto.Source.Cell do
   # restart. Reporting the stored one would have a pendant show an arm the
   # controller is not driving.
   def read("cell.robot", _arg), do: {:ok, to_string(Cell.chain().name)}
+
+  def read("cell.referenced", _arg), do: {:ok, Cell.referenced?()}
   def read(_unknown, _arg), do: {:error, :unknown_node}
 
   @impl ExProto.Source
@@ -186,9 +188,60 @@ defmodule ExProto.Source.Cell do
     end
   end
 
+  def call("cell.mastering", _args, _arg) do
+    axes =
+      for entry <- Cell.mastering() do
+        %{
+          "axis" => to_string(entry.axis_id),
+          "state" => to_string(entry.state),
+          # Zero rather than null for an axis with no zero. The wire type is a
+          # double and the client is a pendant; what makes "no zero" legible is
+          # the state field, which says it in a word.
+          "offset" => entry.offset || 0.0,
+          "drift" => entry.drift || 0.0
+        }
+      end
+
+    {:ok, %{"axes" => axes}}
+  end
+
+  # No arm_still/0 check here, and that is not an omission: the DRIVE refuses
+  # while its own output stage is on, which is both stricter and in the right
+  # place. A cell-level "is anything moving" check would let you master a
+  # stationary-but-enabled axis, which is exactly the case that stalls a
+  # current loop on real hardware.
+  def call("cell.master_axis", args, _arg) do
+    with {:ok, axis} <- axis(args) do
+      at = Map.get(args, "at", 0.0)
+
+      case Cell.master_axis(axis, at) do
+        {:ok, offset} -> {:ok, %{"offset" => offset}}
+        {:error, _reason} -> {:error, :rejected}
+      end
+    end
+  end
+
   def call(_unknown, _args, _arg), do: {:error, :not_callable}
 
   # ── Arguments ─────────────────────────────────────────────────────────────
+
+  # Axis ids arrive as strings and drives are registered under atoms built from
+  # them, so this converts — but only to an atom that already exists. A client
+  # naming an axis that does not is a refusal, not a reason to grow the atom
+  # table from the network.
+  defp axis(args) do
+    case Map.get(args, "axis") do
+      axis when is_binary(axis) and axis != "" ->
+        try do
+          {:ok, String.to_existing_atom(axis)}
+        rescue
+          ArgumentError -> {:error, :rejected}
+        end
+
+      _absent ->
+        {:error, :rejected}
+    end
+  end
 
   defp name(args) do
     case Map.get(args, "name") do

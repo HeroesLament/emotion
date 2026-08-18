@@ -80,6 +80,22 @@ defmodule Exdrive.Drive do
     profile_accel:      10.0,     # rad/s²  — object 0x6083
     profile_decel:      10.0,     # rad/s²  — object 0x6084
     quick_stop_decel:   100.0,    # rad/s²  — object 0x6085, intentionally >> profile_decel
+    # mastering — where joint zero is, and whether we still know where we are.
+    # The drive owns the offset because on real hardware the encoder is on the
+    # driver board: the offset is a property of THIS board bolted to THIS
+    # motor, and a board swap legitimately invalidates it. See
+    # servo4257-rs/docs/MASTERING.md for why it is not pushed from here.
+    #
+    # Note the unit. Everything in this module is SI, so the offset is
+    # radians, not encoder counts — the counts/radians conversion belongs to
+    # the CANopen adapter that talks to a real drive, not to the model of one.
+    master_offset:      nil,      # rad; nil means no joint zero was declared
+    mastering:          :unmastered,  # :unmastered | :unreferenced | :referenced
+    mastering_drift:    nil,      # rad the axis appears to have moved while off
+    # A quantisation allowance, NOT a movement allowance. It has to clear
+    # sim_noise and nothing else; anything a human would call "it moved" must
+    # trip it. ~0.057 degrees.
+    mastering_tolerance: 1.0e-3,  # rad
     # homing
     homing_method:      1,
     homing_complete:    false,
@@ -207,11 +223,77 @@ defmodule Exdrive.Drive do
       sim_fault_rate: Keyword.get(opts, :sim_fault_rate, 0.0),
     }
 
+    # A simulated arm has no witness mark to drive to, so a blank page here
+    # would mean every dev session started by mastering six axes by hand. This
+    # is the SIMULATOR'S factory step, and it is deliberately an option rather
+    # than a hardcoded convenience: a real drive ships unmastered because
+    # nobody has bolted it into a joint yet, and the CANopen adapter that talks
+    # to one must never pass this.
+    #
+    # It only fires on a blank page. Once an axis has a record, this cannot
+    # touch it — so backdriving, erasing and re-mastering all still behave, and
+    # the interlock still means something.
+    master_on_first_boot? = Keyword.get(opts, :master_on_first_boot, true)
+
     unless data.clock in [:internal, :external] do
       raise ArgumentError, ":clock must be :internal or :external, got #{inspect(data.clock)}"
     end
+
+    data = resolve_mastering(data)
+
+    data =
+      if master_on_first_boot? and data.mastering == :unmastered and
+           is_nil(Exdrive.Flash.record(data.axis_id)) do
+        do_master(data, 0.0)
+      else
+        data
+      end
+
     {:ok, :not_ready_to_switch_on, data}
   end
+
+  # Coming up is a boot, and a boot is a question: does this axis still know
+  # where it is? Ask the flash and the rotor, not the caller.
+  defp resolve_mastering(data) do
+    {state, position, offset, drift} =
+      Exdrive.Flash.resolve(
+        Exdrive.Flash.record(data.axis_id),
+        Exdrive.Flash.rotor(data.axis_id),
+        data.mastering_tolerance
+      )
+
+    %{
+      data
+      | mastering: state,
+        master_offset: offset,
+        mastering_drift: drift,
+        actual_position: position,
+        target_position: position
+    }
+  end
+
+  @doc """
+  Declare that this axis is right now at `joint_zero_is` radians.
+
+  Refused while the output stage is on, and that is not fussiness. On real
+  hardware a flash write stalls instruction fetch, so committing with the coils
+  energised stalls the current loop — and separately, mastering a moving axis
+  records a position that was already stale when it was written. The firmware
+  answers SDO abort 0x08000022 here; this answers `{:error, :output_enabled}`.
+  """
+  def master(axis_id, joint_zero_is \\ 0.0) when is_number(joint_zero_is) do
+    :gen_statem.call(axis_name(axis_id), {:master, joint_zero_is})
+  end
+
+  @doc """
+  Write the MASTER record — the power-down save.
+
+  Called from `terminate/2`, which runs on a graceful stop and does NOT run on
+  a kill. That asymmetry is deliberate and load-bearing: it is the difference
+  between a clean power-down and yanking the plug, and it is the only way a
+  test can produce an axis that comes back not knowing where it is.
+  """
+  def save(axis_id), do: :gen_statem.call(axis_name(axis_id), :save)
 
   # --- State: not_ready_to_switch_on ----------------------------------------
 
@@ -239,6 +321,16 @@ defmodule Exdrive.Drive do
 
   def switch_on_disabled(:cast, {:control_word, 0x0006}, data) do
     {:next_state, :ready_to_switch_on, data}
+  end
+
+  def switch_on_disabled({:call, from}, {:master, at}, data) do
+    data = do_master(data, at)
+    {:keep_state, data, [{:reply, from, {:ok, data.master_offset}}]}
+  end
+
+  def switch_on_disabled({:call, from}, :save, data) do
+    Exdrive.Flash.save(data.axis_id, data.actual_position)
+    {:keep_state_and_data, [{:reply, from, :ok}]}
   end
 
   def switch_on_disabled({:call, from}, :status, data) do
@@ -269,6 +361,16 @@ defmodule Exdrive.Drive do
 
   def ready_to_switch_on(:cast, {:control_word, 0x0000}, data) do
     {:next_state, :switch_on_disabled, data}
+  end
+
+  def ready_to_switch_on({:call, from}, {:master, at}, data) do
+    data = do_master(data, at)
+    {:keep_state, data, [{:reply, from, {:ok, data.master_offset}}]}
+  end
+
+  def ready_to_switch_on({:call, from}, :save, data) do
+    Exdrive.Flash.save(data.axis_id, data.actual_position)
+    {:keep_state_and_data, [{:reply, from, :ok}]}
   end
 
   def ready_to_switch_on({:call, from}, :status, data) do
@@ -309,6 +411,16 @@ defmodule Exdrive.Drive do
   def switched_on(:cast, {:set_target_position, _}, _data), do: {:keep_state_and_data, [:postpone]}
   def switched_on(:cast, {:set_target_velocity, _}, _data), do: {:keep_state_and_data, [:postpone]}
   def switched_on(:cast, {:set_target_torque,   _}, _data), do: {:keep_state_and_data, [:postpone]}
+
+  def switched_on({:call, from}, {:master, at}, data) do
+    data = do_master(data, at)
+    {:keep_state, data, [{:reply, from, {:ok, data.master_offset}}]}
+  end
+
+  def switched_on({:call, from}, :save, data) do
+    Exdrive.Flash.save(data.axis_id, data.actual_position)
+    {:keep_state_and_data, [{:reply, from, :ok}]}
+  end
 
   def switched_on({:call, from}, :status, data) do
     {:keep_state_and_data, [{:reply, from, status_map(:switched_on, data)}]}
@@ -369,6 +481,19 @@ defmodule Exdrive.Drive do
     {:keep_state, %{data | target_torque: torque}}
   end
 
+  # Refused with the output stage on. A flash write stalls instruction fetch on
+  # real hardware, so committing here stalls the current loop with energised
+  # coils — and a moving axis records a position that is stale by the time it
+  # lands. The firmware answers SDO abort 0x08000022 to the same request.
+  def operation_enabled({:call, from}, {:master, _at}, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, :output_enabled}}]}
+  end
+
+  def operation_enabled({:call, from}, :save, data) do
+    Exdrive.Flash.save(data.axis_id, data.actual_position)
+    {:keep_state_and_data, [{:reply, from, :ok}]}
+  end
+
   def operation_enabled({:call, from}, :status, data) do
     {:keep_state_and_data, [{:reply, from, status_map(:operation_enabled, data)}]}
   end
@@ -398,6 +523,19 @@ defmodule Exdrive.Drive do
     advance_stopping(data, data.tick_period, schedule_tick(data))
   end
 
+  # Refused with the output stage on. A flash write stalls instruction fetch on
+  # real hardware, so committing here stalls the current loop with energised
+  # coils — and a moving axis records a position that is stale by the time it
+  # lands. The firmware answers SDO abort 0x08000022 to the same request.
+  def quick_stop_active({:call, from}, {:master, _at}, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, :output_enabled}}]}
+  end
+
+  def quick_stop_active({:call, from}, :save, data) do
+    Exdrive.Flash.save(data.axis_id, data.actual_position)
+    {:keep_state_and_data, [{:reply, from, :ok}]}
+  end
+
   def quick_stop_active({:call, from}, :status, data) do
     {:keep_state_and_data, [{:reply, from, status_map(:quick_stop_active, data)}]}
   end
@@ -417,6 +555,16 @@ defmodule Exdrive.Drive do
     {:next_state, :switch_on_disabled, %{data | fault_code: nil}}
   end
 
+  def fault({:call, from}, {:master, at}, data) do
+    data = do_master(data, at)
+    {:keep_state, data, [{:reply, from, {:ok, data.master_offset}}]}
+  end
+
+  def fault({:call, from}, :save, data) do
+    Exdrive.Flash.save(data.axis_id, data.actual_position)
+    {:keep_state_and_data, [{:reply, from, :ok}]}
+  end
+
   def fault({:call, from}, :status, data) do
     {:keep_state_and_data, [{:reply, from, status_map(:fault, data)}]}
   end
@@ -433,6 +581,7 @@ defmodule Exdrive.Drive do
   # internally ticked one run identical physics and emit identical events.
   defp advance_enabled(data, dt, actions) do
     data = sim_tick(data, dt)
+    Exdrive.Flash.set_rotor(data.axis_id, data.actual_position)
 
     broadcast(data, {:position_update, data.axis_id,
                      data.actual_position, data.actual_velocity, data.actual_torque})
@@ -446,6 +595,7 @@ defmodule Exdrive.Drive do
 
   defp advance_stopping(data, dt, actions) do
     data = sim_decelerate(data, dt)
+    Exdrive.Flash.set_rotor(data.axis_id, data.actual_position)
     broadcast(data, {:position_update, data.axis_id,
                      data.actual_position, data.actual_velocity, data.actual_torque})
     # rad/s. Below this the axis is stopped for any purpose that matters.
@@ -583,8 +733,47 @@ defmodule Exdrive.Drive do
       target_velocity:  data.target_velocity,
       target_torque:    data.target_torque,
       homing_complete:  data.homing_complete,
+      # Two different positions, and conflating them is the bug this whole
+      # subsystem exists to prevent. `actual_position` is the drive's own
+      # accumulator — always a number, never meaningful on its own.
+      # `joint_position` is that number related to a declared zero, and it is
+      # nil exactly when nobody may act on it.
+      mastering:        data.mastering,
+      master_offset:    data.master_offset,
+      mastering_drift:  data.mastering_drift,
+      joint_position:   joint_position(data),
       fault_code:       data.fault_code,
     }
+  end
+
+  defp joint_position(%{mastering: :referenced, master_offset: off} = data) when is_number(off) do
+    Float.round(data.actual_position - off, 4)
+  end
+
+  defp joint_position(_data), do: nil
+
+  # Declaring a zero and persisting it are one act, not two: a master that is
+  # not committed is a number that disappears at the next power cut, and the
+  # operator who set it has already walked away.
+  defp do_master(data, joint_zero_is) do
+    Exdrive.Flash.master(data.axis_id, data.actual_position, joint_zero_is)
+    resolve_mastering(data)
+  end
+
+  # The power-down save. Runs on a graceful stop; does not run on a kill.
+  # That is the model of a bulk-capacitor save versus yanking the plug, and it
+  # is what lets a test produce an axis that comes back not knowing where it is.
+  #
+  # Deliberately NOT paired with `trap_exit`. Trapping would make terminate run
+  # on a parent's exit too, which would mean every abrupt death saved cleanly —
+  # and then no test could ever produce an axis that comes back not knowing
+  # where it is, which is the failure this whole subsystem exists to handle.
+  # It also changes what a linked caller exiting normally does to the drive,
+  # which the existing suite relies on.
+  @impl true
+  def terminate(_reason, _state, data) do
+    Exdrive.Flash.save(data.axis_id, data.actual_position)
+    :ok
   end
 
   defp add_subscriber(data, pid) do

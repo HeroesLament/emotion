@@ -45,6 +45,84 @@ defmodule ExMo.Cell do
     %{chain | tool: FK.compose(chain.flange, tool())}
   end
 
+  @doc """
+  What every joint of the loaded arm says about its own zero.
+
+  A report, not a judgement: `[%{axis_id:, state:, offset:, drift:}]` in chain
+  order. `state` is `:referenced`, `:unreferenced`, `:unmastered` or
+  `:unreadable`, and they are different missing facts rather than severity
+  levels — an operator told only "not ready" has to go and find out which.
+  """
+  def mastering, do: ExMove.Mastering.report(chain())
+
+  @doc """
+  True when every joint knows where it is.
+
+  This is the precondition for anything that builds a pose: Cartesian motion,
+  teaching, running a program. Joint jog is deliberately NOT gated on it,
+  because driving to the witness mark is how an unreferenced axis is recovered.
+  """
+  def referenced?, do: ExMove.Mastering.check(chain()) == :ok
+
+  @doc """
+  Declares that `axis_id` is right now at `at` radians, and records it.
+
+  The drive persists the offset; this writes a shadow row so the change has a
+  date and a predecessor. That ordering matters — the controller must never be
+  the source of a mastering, only a witness to one. See
+  `servo4257-rs/docs/MASTERING.md`.
+
+  Refused while the drive's output stage is on, by the drive itself.
+  """
+  def master_axis(axis_id, at \\ 0.0) do
+    with {:ok, offset} <- Exdrive.Drive.master(axis_id, at) do
+      record_mastering(axis_id, offset, "taught")
+      {:ok, offset}
+    end
+  end
+
+  @doc """
+  Writes down what the fleet currently says, and reports what changed.
+
+  Called at boot. The findings are the point: an axis re-mastered underneath a
+  cell full of taught points is invisible everywhere else, because every joint
+  still reports a plausible angle and every move still executes cleanly.
+  """
+  def audit_mastering do
+    case ExStore.Robots.active() do
+      nil ->
+        {:ok, []}
+
+      robot ->
+        report = mastering()
+        observed = Map.new(report, &{to_string(&1.axis_id), &1.offset})
+        findings = ExStore.Masterings.compare(robot.id, observed)
+
+        ExStore.Masterings.snapshot(
+          robot.id,
+          Map.new(report, &{to_string(&1.axis_id), %{offset: &1.offset, state: &1.state}})
+        )
+
+        {:ok, findings}
+    end
+  end
+
+  defp record_mastering(axis_id, offset, source) do
+    case ExStore.Robots.active() do
+      nil ->
+        :ok
+
+      robot ->
+        ExStore.Masterings.record(%{
+          robot_id: robot.id,
+          axis_id: to_string(axis_id),
+          offset: offset,
+          state: "referenced",
+          source: source
+        })
+    end
+  end
+
   @doc "The fitted tool as a transform from the flange. Identity when bare."
   def tool do
     case Tools.fitted() do

@@ -1,7 +1,13 @@
 defmodule Exdrive.Supervisor do
   @moduledoc """
   Supervises all Drive processes. Each axis is an independent gen_statem.
-  A fault on one axis does not restart others — :one_for_one strategy.
+  A fault on one axis does not restart others.
+
+  `:rest_for_one` rather than `:one_for_one` for exactly one reason: the first
+  child is `Exdrive.Flash`, which owns what survives a drive restart. If it
+  goes, every drive above it is holding a position no longer backed by
+  anything, and coming back up unmastered is the honest outcome. Drives are
+  started dynamically after it, so nothing else is disturbed by the ordering.
   """
   use Supervisor
 
@@ -24,6 +30,8 @@ defmodule Exdrive.Supervisor do
 
   @impl true
   def init(_opts) do
-    Supervisor.init([], strategy: :one_for_one)
+    # Flash first, and it is not a drive: it holds what survives a drive
+    # restart, so it must outlive every child it serves. See Exdrive.Flash.
+    Supervisor.init([Exdrive.Flash], strategy: :rest_for_one)
   end
 end

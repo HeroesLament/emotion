@@ -159,6 +159,43 @@ defmodule ExMo.Schema.Registry do
             }
           ]
       },
+      "type.axis_mastering" => %StructType{
+        id: "type.axis_mastering",
+        name: "AxisMastering",
+        description:
+          "What one joint says about its own zero. `state` is the useful " <>
+            "field and its three values are different missing facts rather " <>
+            "than severity levels: `unmastered` means nobody ever declared a " <>
+            "zero for this joint; `unreferenced` means the zero is known but " <>
+            "the turn count was lost, which is what happens when the joint " <>
+            "was moved while the power was off; `referenced` means nothing is " <>
+            "missing. Only the last permits Cartesian motion, taught points or " <>
+            "a program. Joint jog stays available in all of them, because " <>
+            "driving to the witness mark is how an axis is recovered.",
+        fields: [
+          %ResultField{name: "axis", type: :string, description: "The drive"},
+          %ResultField{
+            name: "state",
+            type: :string,
+            description: "unmastered | unreferenced | referenced | unreadable"
+          },
+          %ResultField{
+            name: "offset",
+            type: :double,
+            description: "Accumulator value at joint zero, radians. Zero when unknown."
+          },
+          %ResultField{
+            name: "drift",
+            type: :double,
+            description:
+              "Radians the joint appears to have moved while the power was " <>
+                "off. Reported even when it was inside tolerance: a drift " <>
+                "that creeps toward the limit over months is a slipping " <>
+                "coupling, and swallowing it because it passed is how that " <>
+                "finding is lost."
+          }
+        ]
+      },
       "type.behavior_phase" => %Enum{
         id: "type.behavior_phase",
         name: "BehaviorPhase",
@@ -692,6 +729,21 @@ defmodule ExMo.Schema.Registry do
           type: :string,
           read_grant: :read_state
         },
+        %Property{
+          id: "cell.referenced",
+          name: "Referenced",
+          description:
+            "True when every joint of the loaded arm knows where it is. The " <>
+              "precondition for anything that builds a pose: Cartesian " <>
+              "motion, teaching a point, running a program. Deliberately NOT " <>
+              "a precondition for joint jog — an unreferenced axis still has " <>
+              "an accumulator, and driving it to the witness mark is exactly " <>
+              "how it is recovered. Read `cell.mastering` for which joint.",
+          type: :boolean,
+          read_grant: :read_state
+        },
+        mastering(),
+        master_axis(),
         teach_point(),
         forget_point(),
         list_points(),
@@ -957,6 +1009,75 @@ defmodule ExMo.Schema.Registry do
           name: "tools",
           type: {:array, {:ref, "type.stored_tool"}},
           description: "Stored tools, by name"
+        }
+      ]
+    }
+  end
+
+  defp mastering do
+    %Method{
+      id: "cell.mastering",
+      name: "Mastering",
+      description:
+        "What every joint says about its own zero, in chain order. Read this " <>
+          "after a power cycle and before trusting a taught point.",
+      async: false,
+      call_grant: :read_state,
+      output_args: [
+        %ResultField{
+          name: "axes",
+          type: {:array, {:ref, "type.axis_mastering"}},
+          description: "One entry per joint, base to tip"
+        }
+      ]
+    }
+  end
+
+  defp master_axis do
+    %Method{
+      id: "cell.master_axis",
+      name: "MasterAxis",
+      description:
+        "Declares that this joint is RIGHT NOW at `at` radians, and records " <>
+          "it. This is the recovery for an unreferenced or unmastered axis: " <>
+          "jog it to the witness mark, then say where that is.\n\n" <>
+          "The drive keeps the number, not the controller. On real hardware " <>
+          "the encoder is on the driver board, so the offset is a property of " <>
+          "that board bolted to that motor bolted into that joint — a board " <>
+          "swap legitimately invalidates it, and a controller that pushed a " <>
+          "stored offset back at boot would silently relocate every taught " <>
+          "point in the cell with nothing faulting. The controller writes a " <>
+          "dated shadow row so the change has a predecessor, and that is all.\n\n" <>
+          "Refused while the drive's output stage is on: on real hardware a " <>
+          "flash write stalls the current loop, and a moving axis records a " <>
+          "position that is already stale.\n\n" <>
+          "Guarded by `calibrate`, which is the grant that exists for exactly " <>
+          "this — writing joint offsets is not something an operator does " <>
+          "with a pendant in their hand.",
+      async: false,
+      call_grant: :calibrate,
+      input_args: [
+        %Argument{
+          name: "axis",
+          type: :string,
+          required: true,
+          description: "The drive to master"
+        },
+        %Argument{
+          name: "at",
+          type: :double,
+          required: false,
+          description:
+            "The joint angle this position is being declared to be. Defaults " <>
+              "to zero. A witness mark deliberately outside the working range " <>
+              "is supported — that is what this argument is for."
+        }
+      ],
+      output_args: [
+        %ResultField{
+          name: "offset",
+          type: :double,
+          description: "The accumulator value now recorded as joint zero, radians"
         }
       ]
     }

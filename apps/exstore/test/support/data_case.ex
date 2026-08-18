@@ -47,6 +47,7 @@ defmodule ExStore.DataCase do
           ExStore.Program.Program,
           ExStore.Cell.Point,
           ExStore.Cell.JointSetting,
+          ExStore.Cell.Mastering,
           ExStore.Cell.Robot,
           ExStore.Geometry.Tool
         ] do

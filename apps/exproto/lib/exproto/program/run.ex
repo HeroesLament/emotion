@@ -178,7 +178,16 @@ defmodule ExProto.Program.Run do
   end
 
   def handle_call({:start, name}, _from, state) do
+    # Checked here rather than per statement, and before anything is fetched.
+    #
+    # A program is a sequence of poses, and a pose built on a joint that does
+    # not know where it is does not look like a fault — it looks like a
+    # plausible position. Refusing halfway down would leave the arm somewhere
+    # nobody chose; refusing at the top is the only version an operator can
+    # act on. The chain is captured for the whole run a few lines below, so
+    # this is checked against the same fleet the run will command.
     with :ok <- Mode.allows_program?(state.mode),
+         :ok <- ExMove.Mastering.check(Cell.chain()),
          {:ok, program} <- fetch_program(name),
          {:ok, body} <- fetch_body(program) do
       Logger.info("program #{program.name}: starting, #{length(body)} statements")

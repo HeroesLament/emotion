@@ -254,6 +254,44 @@ defmodule ExProto.Program.RunTest do
     test "a program that is not there is refused by name" do
       assert {:error, {:unknown_program, "nope"}} = Run.start("nope", RunTestRun)
     end
+
+    test "a program is refused when a joint does not know where it is", %{tag: tag, chain: chain} do
+      # Refused at the top, before the program is even fetched. A program is a
+      # sequence of poses, and a pose built on a joint that does not know where
+      # it is does not look like a fault — it looks like a plausible position.
+      # Refusing halfway down would leave the arm somewhere nobody chose.
+      teach("a_t#{tag}", 0.02)
+      program_with(tag, [{"move_linear", %{"point" => "a_t#{tag}"}}])
+
+      # Write the record rather than move the rotor, so the drift is 0.4 no
+      # matter what the arm was doing when this test got the machine. Moving
+      # the rotor would depend on the drive having saved on the way down, and
+      # a supervisor shutdown does not run terminate/3 — the drive does not
+      # trap exits, deliberately, so that a kill can model a real power cut.
+      axis = Enum.at(chain.axis_ids, 2)
+      Supervisor.terminate_child(Exdrive.Supervisor, {Exdrive.Drive, axis})
+      rotor = Exdrive.Flash.rotor(axis) || 0.0
+      Exdrive.Flash.master(axis, rotor - 0.4, 0.0)
+      {:ok, _} = Supervisor.restart_child(Exdrive.Supervisor, {Exdrive.Drive, axis})
+
+      on_exit(fn ->
+        Supervisor.terminate_child(Exdrive.Supervisor, {Exdrive.Drive, axis})
+        rotor = Exdrive.Flash.rotor(axis) || 0.0
+        Exdrive.Flash.master(axis, rotor, rotor)
+        Supervisor.restart_child(Exdrive.Supervisor, {Exdrive.Drive, axis})
+        Exdrive.enable(axis)
+      end)
+
+      # Establish the precondition rather than assume it. A test that asserts a
+      # refusal and does not check the condition it depends on passes for as
+      # long as nothing else in the VM has re-mastered the axis.
+      wait_until(fn -> Exdrive.Drive.status(axis).mastering == :unreferenced end)
+
+      assert {:error, {:not_referenced, [{^axis, :unreferenced}]}} =
+               Run.start("prog_t#{tag}", RunTestRun)
+
+      assert Run.status(RunTestRun).state == :idle
+    end
   end
 
   describe "holding" do
