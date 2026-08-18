@@ -7,6 +7,8 @@ defmodule ExMo.Schema.Registry do
   printer/drive fragments, etc. For now it's explicit and inspectable.
   """
 
+  alias ExMo.Cell.Loaded
+
   alias ExMo.Schema.{
     Argument,
     Model,
@@ -170,71 +172,53 @@ defmodule ExMo.Schema.Registry do
 
   # ── Axes ──────────────────────────────────────────────────────────────────
 
-  # The arm, in SI. Limits mirror the demo chain in EMotion.Startup; they are
-  # here rather than derived from it because the controller owns the cell model
-  # and the Studio is a consumer of it, not the other way round.
+  # The arm, derived from the chain this controller was commissioned with.
+  #
+  # This was a literal list of six axes whose limits, per the comment that used
+  # to sit here, "mirror the demo chain" — a third description of one arm,
+  # agreeing with the other two only for as long as nobody edited any of them.
+  # It is now read from the loaded URDF and its commissioning, which is what
+  # makes the address space a fact about the machine rather than about the
+  # build.
   #
   # `display_unit: :degrees` is a hint to whatever renders these for a human.
   # It does not change the values, which are radians everywhere.
-  @arm_axes [
-    %{
-      id: "axes.j1",
-      name: "J1",
-      type: :rotary,
-      limits: {-3.05, 3.05},
-      home_pos: 0.0,
-      display_unit: :degrees,
-      description: "Shoulder pan"
-    },
-    %{
-      id: "axes.j2",
-      name: "J2",
-      type: :rotary,
-      limits: {-3.05, 3.05},
-      home_pos: 0.0,
-      display_unit: :degrees,
-      description: "Shoulder lift"
-    },
-    %{
-      id: "axes.j3",
-      name: "J3",
-      type: :rotary,
-      limits: {-3.05, 3.05},
-      home_pos: 0.0,
-      display_unit: :degrees,
-      description: "Elbow"
-    },
-    %{
-      id: "axes.j4",
-      name: "J4",
-      type: :rotary,
-      limits: {-3.05, 3.05},
-      home_pos: 0.0,
-      display_unit: :degrees,
-      description: "Wrist 1"
-    },
-    %{
-      id: "axes.j5",
-      name: "J5",
-      type: :rotary,
-      limits: {-3.05, 3.05},
-      home_pos: 0.0,
-      display_unit: :degrees,
-      description: "Wrist 2"
-    },
-    %{
-      id: "axes.j6",
-      name: "J6",
-      type: :rotary,
-      limits: {-3.05, 3.05},
-      home_pos: 0.0,
-      display_unit: :degrees,
-      description: "Wrist 3"
-    }
-  ]
+  defp arm_axis_specs do
+    chain = Loaded.chain()
+
+    chain.joints
+    |> Elixir.Enum.zip(chain.axis_ids)
+    |> Elixir.Enum.map(fn {joint, axis_id} ->
+      spec = %{
+        id: "axes.#{axis_id}",
+        name: axis_id |> Atom.to_string() |> String.upcase(),
+        type: axis_type(joint.type),
+        home_pos: 0.0,
+        display_unit: display_unit(joint.type),
+        # The joint's name in the document it came from. Less pretty than
+        # "Shoulder pan", and true — a controller describing an axis as a
+        # shoulder because that is what the last arm's shoulder was called is
+        # the class of thing this exercise was about.
+        description: joint.name
+      }
+
+      # A continuous joint has no travel, and the model says nothing rather
+      # than inventing a limit somebody might believe.
+      case joint.limit do
+        {_lower, _upper} = limits -> Map.put(spec, :limits, limits)
+        nil -> spec
+      end
+    end)
+  end
+
+  defp axis_type(:prismatic), do: :linear
+  defp axis_type(_rotary), do: :rotary
+
+  defp display_unit(:prismatic), do: :mm
+  defp display_unit(_rotary), do: :degrees
 
   @doc "The registered axis specs, for tests and for whoever wires the drives."
-  def arm_axes, do: @arm_axes
+  def arm_axes, do: arm_axis_specs()
 
   @doc """
   The kinematic chain the axes above form.
@@ -244,7 +228,7 @@ defmodule ExMo.Schema.Registry do
   One description: the Studio draws this chain and the controller computes
   forward kinematics over it.
   """
-  def arm_chain, do: ExMove.Library.demo()
+  def arm_chain, do: Loaded.chain()
 
   # The joints, and the point at the end of them.
   #
@@ -267,7 +251,7 @@ defmodule ExMo.Schema.Registry do
         "The arm: its joints, and the tool centre point they place. Positions " <>
           "in radians, velocities in rad/s, the tool in metres.",
       children:
-        Elixir.Enum.map(@arm_axes, &FromAxis.to_object/1) ++
+        Elixir.Enum.map(arm_axis_specs(), &FromAxis.to_object/1) ++
           [
             tcp_object(),
             cartesian_motion_object(),
@@ -631,7 +615,7 @@ defmodule ExMo.Schema.Registry do
   # the axes rather than asserted here. An arm of open-loop steppers reports a
   # tool centre point computed from where it believes it is.
   defp tcp_object do
-    feedback? = Elixir.Enum.all?(@arm_axes, &FromAxis.feedback?(FromAxis.interface(&1)))
+    feedback? = Elixir.Enum.all?(arm_axis_specs(), &FromAxis.feedback?(FromAxis.interface(&1)))
 
     %Object{
       id: "axes.tcp",

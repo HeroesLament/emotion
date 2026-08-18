@@ -35,7 +35,13 @@ defmodule ExMo.Cell do
   nobody finished.
   """
   def chain do
-    %{Registry.arm_chain() | tool: tool()}
+    chain = Registry.arm_chain()
+
+    # The flange belongs to the mechanism and the tool belongs to whoever
+    # bolted one on, so the URDF and the store each own one of them and this is
+    # the only place they meet. Order matters and is the readable one: out from
+    # the last axis to the mounting face, then out to the tool centre point.
+    %{chain | tool: FK.compose(chain.flange, tool())}
   end
 
   @doc "The fitted tool as a transform from the flange. Identity when bare."

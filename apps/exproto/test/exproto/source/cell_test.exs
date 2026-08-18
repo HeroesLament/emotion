@@ -17,6 +17,12 @@ defmodule ExProto.Source.CellTest do
   setup do
     tag = System.unique_integer([:positive])
 
+    # Fitting is refused while the arm is moving, so "the arm is not moving" is
+    # this file's precondition and it is established rather than assumed. The
+    # same lesson as ModeTest: a test that depends on machine state and does
+    # not set it passes for as long as nothing else in the VM has moved the arm.
+    ExMove.CartesianStream.release(ExMo.Schema.Registry.arm_chain().name)
+
     on_exit(fn ->
       # Children first: the database refuses to orphan one, which is the point.
       for frame <- Enum.reverse(Frames.list()), String.contains?(frame.name, "t#{tag}") do

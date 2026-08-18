@@ -23,3 +23,8 @@ config :exauth, auto_provision: false
 # whenever a controller was up on the same machine. A test run should not
 # depend on what else the developer happens to have running.
 config :exhmi, port: 0
+
+# The suite owns what the controller is commissioned with. Loading at boot
+# would seed the database before the test helper has migrated it, and would
+# make every model assertion depend on rows a previous run left behind.
+config :exhmi, auto_load_robot: false
