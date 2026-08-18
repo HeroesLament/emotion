@@ -76,6 +76,40 @@ defmodule ExMo.Schema.Registry do
             }
           ]
       },
+      "type.stored_program" => %StructType{
+        id: "type.stored_program",
+        name: "StoredProgram",
+        description: "A stored program, without its body.",
+        fields: [
+          %ResultField{name: "name", type: :string, description: "The program's name"},
+          %ResultField{
+            name: "statements",
+            type: :int32,
+            description: "How many statements it has"
+          }
+        ]
+      },
+      "type.statement" => %StructType{
+        id: "type.statement",
+        name: "Statement",
+        description:
+          "One statement of a program: what kind it is, what it references, and " <>
+            "its literal arguments rendered for a human.",
+        fields: [
+          %ResultField{name: "seq", type: :int32, description: "Its place in the body, from zero"},
+          %ResultField{name: "kind", type: :string, description: "Which statement kind"},
+          %ResultField{
+            name: "args",
+            type: :string,
+            description: "The literal arguments, rendered — feedrates, blends, durations"
+          },
+          %ResultField{
+            name: "refs",
+            type: :string,
+            description: "What it points at, by name — the point it moves to, and any via"
+          }
+        ]
+      },
       "type.stored_point" => %StructType{
         id: "type.stored_point",
         name: "StoredPoint",
@@ -195,6 +229,7 @@ defmodule ExMo.Schema.Registry do
         axes_object(),
         behaviors_object(rpp_catalog, rpp_runtime),
         cell_object(),
+        programs_object(),
         printers_object(),
         state_object()
       ]
@@ -417,6 +452,197 @@ defmodule ExMo.Schema.Registry do
     }
   end
 
+
+  # ── Programs ──────────────────────────────────────────────────────────────
+
+  # What a pendant renders while a program runs, and the handful of commands
+  # that drive one. The *body* is not here: `PROGRAMS.md` §4 keeps it off this
+  # link, because a program of a thousand statements has no business in a frame
+  # competing with a 30 Hz position stream.
+  defp programs_object do
+    %Object{
+      id: "program",
+      name: "Program",
+      description:
+        "The stored program this controller is running, and the commands that " <>
+          "run it. A program runs in auto and is refused in manual, the mirror " <>
+          "of a jog — and once started it does not depend on the client that " <>
+          "started it, which is the property that makes this a controller " <>
+          "rather than a document.",
+      children: [
+        %Property{
+          id: "program.name",
+          name: "Name",
+          description: "The program that is loaded, or empty when none is",
+          type: :string,
+          read_grant: :read_state
+        },
+        %Property{
+          id: "program.state",
+          name: "State",
+          description:
+            "idle | running | held | faulted | done. `held` is stopped and " <>
+              "resumable; `faulted` is stopped because a statement was refused " <>
+              "and is not. `done` is distinct from `idle` on purpose: a program " <>
+              "that finished and one that was never started should not look the " <>
+              "same.",
+          type: :string,
+          read_grant: :read_state
+        },
+        %Property{
+          id: "program.statement",
+          name: "Statement",
+          description:
+            "The index of the statement the *arm* is on, which is not always " <>
+              "the one the interpreter has reached — motion is queued ahead so " <>
+              "moves can blend. This is the line a pendant highlights.",
+          type: :int32,
+          read_grant: :read_state
+        },
+        %Property{
+          id: "program.statements",
+          name: "Statements",
+          description: "How many statements the loaded program has",
+          type: :int32,
+          read_grant: :read_state
+        },
+        %Property{
+          id: "program.kind",
+          name: "Kind",
+          description: "The kind of statement being executed, or empty",
+          type: :string,
+          read_grant: :read_state
+        },
+        %Property{
+          id: "program.reason",
+          name: "Reason",
+          description:
+            "Why the run faulted, in the controller's own words — a refused " <>
+              "move, a tool that does not match what the point was taught with. " <>
+              "Empty unless the state is `faulted`.",
+          type: :string,
+          read_grant: :read_state
+        },
+        program_start(),
+        program_hold(),
+        program_resume(),
+        program_step(),
+        program_stop(),
+        program_list(),
+        program_show()
+      ]
+    }
+  end
+
+  defp program_start do
+    %Method{
+      id: "program.start",
+      name: "Start",
+      description:
+        "Runs a stored program from its first statement. Refused outside auto, " <>
+          "refused while another program is running, and refused if the program " <>
+          "uses a statement kind this build does not know — that last one " <>
+          "meaning an unloaded extension makes a program fail to start rather " <>
+          "than fail halfway down it.\n\nReturns as soon as the run is " <>
+          "accepted. Watch `program.state`.",
+      async: true,
+      call_grant: :execute_program,
+      input_args: [
+        %Argument{name: "name", type: :string, required: true, description: "The program to run"}
+      ]
+    }
+  end
+
+  defp program_hold do
+    %Method{
+      id: "program.hold",
+      name: "Hold",
+      description:
+        "Stops the arm where it is and keeps the run. The interpreter rewinds " <>
+          "to the oldest statement whose motion had not finished, because that " <>
+          "is where the arm actually is.",
+      async: false,
+      call_grant: :execute_program
+    }
+  end
+
+  defp program_resume do
+    %Method{
+      id: "program.resume",
+      name: "Resume",
+      description:
+        "Re-issues the held statement from wherever the arm is standing. For a " <>
+          "straight move that is exactly the remainder of the original line. " <>
+          "Refused during an arc, whose via point may be behind the arm — a " <>
+          "circle recomputed through a via already passed is a different path, " <>
+          "and drawing it quietly would be worse than refusing.",
+      async: false,
+      call_grant: :execute_program
+    }
+  end
+
+  defp program_step do
+    %Method{
+      id: "program.step",
+      name: "Step",
+      description: "Runs exactly one statement and holds again.",
+      async: false,
+      call_grant: :execute_program
+    }
+  end
+
+  defp program_stop do
+    %Method{
+      id: "program.stop",
+      name: "Stop",
+      description:
+        "Abandons the run and stops the arm. There is no resume from a stop; " <>
+          "the next run starts at the top.",
+      async: false,
+      call_grant: :execute_program
+    }
+  end
+
+  defp program_list do
+    %Method{
+      id: "program.list",
+      name: "ListPrograms",
+      description: "Every stored program, with how many statements it has.",
+      async: false,
+      call_grant: :read_state,
+      output_args: [
+        %ResultField{
+          name: "programs",
+          type: {:array, {:ref, "type.stored_program"}},
+          description: "Stored programs, by name"
+        }
+      ]
+    }
+  end
+
+  defp program_show do
+    %Method{
+      id: "program.show",
+      name: "ShowProgram",
+      description:
+        "A program's body: every statement, in order, with its kind, its " <>
+          "literal arguments and what it references. This is the readable " <>
+          "rendering — the canonical transfer of a large body is HTTP, per " <>
+          "PROGRAMS.md §4.",
+      async: false,
+      call_grant: :read_state,
+      input_args: [
+        %Argument{name: "name", type: :string, required: true, description: "The program to show"}
+      ],
+      output_args: [
+        %ResultField{
+          name: "statements",
+          type: {:array, {:ref, "type.statement"}},
+          description: "The body, in order"
+        }
+      ]
+    }
+  end
 
   # ── The cell: stored geometry ─────────────────────────────────────────────
 

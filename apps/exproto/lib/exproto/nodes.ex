@@ -492,10 +492,16 @@ defmodule ExProto.Nodes do
   # can only say the controller said no; one that is told the mode can say what
   # is actually true — the machine is in AUTO — and an operator can go and turn
   # the key rather than filing a bug.
+  # The message says what the selector is, not what the caller wanted, because
+  # both directions of the interlock come through here now: a jog is refused
+  # outside manual and a program is refused outside auto. Naming only one of
+  # them told a client running a program that jogging needs manual, which is
+  # true, unhelpful, and about a different command.
   defp call_error({:wrong_mode, mode}),
     do:
       {:error, @wrong_mode,
-       "The controller is in #{mode} mode; jogging is only permitted in manual",
+       "The controller's mode selector is in #{mode}: jogging is permitted only in " <>
+         "manual, and a program runs only in auto",
        %{"mode" => Atom.to_string(mode)}}
 
   # The command could not be started — not that it started and failed. What

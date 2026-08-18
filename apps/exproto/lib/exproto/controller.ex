@@ -48,6 +48,9 @@ defmodule ExProto.Controller do
       port = Keyword.get(opts, :port, 4001)
       mode = Keyword.get(opts, :mode, Module.concat(ExProto.Mode, "P#{port}"))
 
+      {:ok, _run} =
+        ExProto.Program.Run.start_link(name: ExProto.Program.Run, mode: mode)
+
       endpoint_opts =
         opts
         |> Keyword.take([:port, :scheme, :tls, :mode_position])
@@ -68,7 +71,8 @@ defmodule ExProto.Controller do
      %{
        "axes" => drives,
        "state" => drives,
-       "cell" => {Source.Cell, []}
+       "cell" => {Source.Cell, []},
+       "program" => {Source.Program, [run: ExProto.Program.Run]}
      }}
   end
 
