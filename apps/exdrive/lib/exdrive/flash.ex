@@ -206,11 +206,28 @@ defmodule Exdrive.Flash do
     end
   end
 
+  # Keys are normalised to strings, and this is not tidiness.
+  #
+  # A drive is started with whatever its caller had: `ExProto.Controller`
+  # derives axis ids from node ids and hands over binaries, while a chain
+  # carries atoms and every test writes `:j1`. The drive itself is consistent —
+  # it always uses its own `axis_id` — so mastering worked, and the mismatch
+  # showed up only when something OUTSIDE the drive went looking: `rotor(:j3)`
+  # returned nil for an axis that had been running for minutes, and the caller
+  # would have gone on to invent a position for it.
+  #
+  # Found live rather than in a test, because every test starts drives the same
+  # way it looks them up.
+  defp key(axis_id) when is_binary(axis_id), do: axis_id
+  defp key(axis_id) when is_atom(axis_id), do: Atom.to_string(axis_id)
+  defp key(axis_id), do: to_string(axis_id)
+
   defp lookup(axis_id) do
     ensure_table()
+    k = key(axis_id)
 
-    case :ets.lookup(@table, axis_id) do
-      [{^axis_id, entry}] -> entry
+    case :ets.lookup(@table, k) do
+      [{^k, entry}] -> entry
       [] -> nil
     end
   end
@@ -218,7 +235,7 @@ defmodule Exdrive.Flash do
   defp upsert(axis_id, fun) do
     ensure_table()
     entry = lookup(axis_id) || %{rotor: nil, record: nil}
-    :ets.insert(@table, {axis_id, fun.(entry)})
+    :ets.insert(@table, {key(axis_id), fun.(entry)})
     :ok
   end
 end

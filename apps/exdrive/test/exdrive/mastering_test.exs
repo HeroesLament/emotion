@@ -319,6 +319,27 @@ defmodule Exdrive.MasteringTest do
     assert_in_delta status.master_offset, offset, 1.0e-9
   end
 
+  # --- Keys ----------------------------------------------------------------
+
+  test "an axis is the same axis whether it is named as an atom or a string",
+       %{axis: axis} do
+    # Drives are started with whatever their caller had: ExProto.Controller
+    # derives axis ids from node ids and hands over binaries, a chain carries
+    # atoms, and every test writes :j1. The drive is internally consistent
+    # either way, so mastering worked and this mismatch only showed up when
+    # something OUTSIDE the drive went looking — and got nil for an axis that
+    # had been running for minutes.
+    start!(axis)
+    {:ok, _} = Drive.master(axis, 0.25)
+
+    as_string = to_string(axis)
+    assert Flash.record(as_string) == Flash.record(axis)
+    assert Flash.rotor(as_string) == Flash.rotor(axis)
+
+    Flash.backdrive(as_string, 0.9)
+    assert_in_delta Flash.rotor(axis), 0.9, 1.0e-9
+  end
+
   # --- Erasing --------------------------------------------------------------
 
   test "erasing the page is a factory-fresh board, and the rotor does not move",
