@@ -1,16 +1,16 @@
 # The remaining six: touchpoints, order, and the decisions that are not obvious
 
-Status: PLAN. Nothing here is implemented. Written after measuring the code
+Status: IN PROGRESS. Task 0 and service 4 are implemented; the rest stands. Written after measuring the code
 rather than remembering it; every claim about what exists has a file behind it.
 
 Six services stand between here and V1:
 
 | | service | blocked by |
 |---|---|---|
-| 1 | CANopen adapter to `servo-rs` | a drive seam that does not exist |
+| 1 | CANopen adapter to `servo-rs` | ~~a drive seam that does not exist~~ — done, see Task 0 |
 | 2 | Digital I/O | where the I/O physically is — undecided |
 | 3 | I/O statements | 2 |
-| 4 | Program upload over the wire | nothing |
+| 4 | ~~Program upload over the wire~~ — DONE (`702500c`) | — |
 | 5 | Variables & expressions | nothing |
 | 6 | Branching, loops, labels | 5 |
 
@@ -47,23 +47,34 @@ status  set_target_position  set_target_velocity  set_mode
 enable  control_word  quick_stop  fault_reset  master
 ```
 
-**Task 0 — extract `ExDrive.Axis` as a behaviour**, with `Exdrive.Drive` as its
-first implementation and a config-selected module per axis. This is a
-mechanical refactor of ~30 call sites, it is fully covered by the existing 698
-tests, and it must happen before anything in the hardware track. Doing it later
-means doing it twice, once against a simulator and once against a bus that is
-misbehaving for unrelated reasons.
+**Task 0 — DONE.** The behaviour is `EMotion.Drive`, not `ExDrive.Axis`: the
+namespace was reconciled in the same pass, because `ExMo` was the old name and
+the Studio had been `EMotion.*` all along. `Exdrive.Drive` is its first
+implementation, `EMotion.Axis` is the façade the 28 call sites now go through,
+and `EMotion.Drive.for/1` selects a module per axis from config, defaulting to
+the simulator.
 
-Two things to get right while the file is open:
+`protocol/DESIGN.md` proposed a different shape for this contract — `read/3`,
+`write/4`, `state/1`, in object-dictionary terms. It lost, because a PWM
+actuator has no object dictionary and would have had to fake one. That section
+has been rewritten with the argument. The object-dictionary callbacks were not
+discarded; they became `EMotion.Drive.ObjectDictionary`, an optional second
+behaviour, which is also where the SDO tunnel in `METRONOME.md` lands.
 
-* **Axis ids are already inconsistent.** `ExProto.Controller` derives them from
-  node ids and hands over binaries; chains carry atoms. `Exdrive.Flash`
-  normalises now (commit `2d52f08`), but the behaviour should settle the
-  question rather than let each implementation answer it.
-* **`ExProto.Controller.axes/1` starts phantom drives.** It matches any
-  `axes.<x>.<field>` node id, so `axes.tcp.*` and `axes.cartesian.*` currently
+Of the two things flagged to get right while the file was open:
+
+* **Axis ids — settled.** `EMotion.Drive.normalize_id/1` is the one answer:
+  both spellings are accepted at the boundary and normalised immediately, and
+  an unknown binary raises rather than growing the atom table. Implementations
+  no longer each get to decide.
+* **`ExProto.Controller.axes/1` starts phantom drives — still open.** It
+  matches any `axes.<x>.<field>` node id, so `axes.tcp.*` and `axes.cartesian.*`
   start drives named `"tcp"` and `"cartesian"`. Harmless against a simulator;
-  against a bus it means two node ids that map to no hardware.
+  against a bus it means two node ids that map to no hardware. The seam does
+  not fix this, because supervision is still implementation-specific — nothing
+  above `exdrive` calls a concrete drive any more, but `ExProto.Controller`
+  still *starts* `Exdrive.Drive` children directly. That is the next piece of
+  the hardware track, not this one.
 
 
 ## 1. CANopen adapter to `servo-rs`

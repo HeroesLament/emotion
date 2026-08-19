@@ -15,12 +15,12 @@ defmodule ExProto.Source.Exdrive do
   instants, so the velocity a client renders need not be the velocity that went
   with the position beside it.
 
-  So `read_many/2` groups by axis and calls `Exdrive.Drive.status/1` once each.
+  So `read_many/2` groups by axis and calls `EMotion.Axis.status/1` once each.
   Every value in a batch for one axis comes from the same observation.
 
   ## Writes are checked, cast, and read back
 
-  `Exdrive.Drive.set_target_position/2` is a cast, and a setpoint sent to a
+  `EMotion.Axis.set_target_position/2` is a cast, and a setpoint sent to a
   drive that is not in `switched_on` or `operation_enabled` is discarded rather
   than queued. A source that cast and reported success would tell a client the
   arm had been commanded when nothing had happened.
@@ -42,7 +42,7 @@ defmodule ExProto.Source.Exdrive do
   alias ExProto.Mode
 
   # CiA 402 states in which the drive accepts a setpoint. Everything else
-  # discards it; see Exdrive.Drive.
+  # discards it; see EMotion.Axis.
   @accepting [:switched_on, :operation_enabled]
 
   # Radians or metres per second, whichever the axis is. One number for both
@@ -302,7 +302,7 @@ defmodule ExProto.Source.Exdrive do
          {:ok, status} <- status(axis),
          :ok <- accepting?(status),
          {:ok, _mode} <- ensure_position_mode(axis, status) do
-      Exdrive.Drive.set_target_position(axis, target)
+      EMotion.Axis.set_target_position(axis, target)
 
       # A call is ordered behind the casts already sent, so this observes the
       # drive after the setpoint landed rather than racing it.
@@ -339,13 +339,13 @@ defmodule ExProto.Source.Exdrive do
   defp command(axis, name, args, arg) do
     with {:ok, status} <- status(axis) do
       case name do
-        "enable" -> Exdrive.Drive.enable(axis) && :ok
-        "disable" -> Exdrive.Drive.control_word(axis, 0x0000) && :ok
+        "enable" -> EMotion.Axis.enable(axis) && :ok
+        "disable" -> EMotion.Axis.control_word(axis, 0x0000) && :ok
         # Quick stop: decelerate on the quick-stop ramp and hold. Not an
         # emergency stop — that is a hardware circuit and does not travel
         # through this protocol.
-        "stop" -> Exdrive.Drive.quick_stop(axis) && :ok
-        "reset_fault" -> Exdrive.Drive.fault_reset(axis) && :ok
+        "stop" -> EMotion.Axis.quick_stop(axis) && :ok
+        "reset_fault" -> EMotion.Axis.fault_reset(axis) && :ok
         "home" -> home(axis)
         "jog" -> jog(axis, status, args, arg)
         _ -> {:error, :not_callable}
@@ -367,7 +367,7 @@ defmodule ExProto.Source.Exdrive do
     with {:ok, velocity} <- as_float(args["velocity"]),
          :ok <- mode_permits(velocity == 0.0, arg),
          {:ok, _mode} <- ensure_velocity_mode(axis, status) do
-      Exdrive.Drive.set_target_velocity(axis, clamp_jog(velocity))
+      EMotion.Axis.set_target_velocity(axis, clamp_jog(velocity))
       :ok
     end
   end
@@ -445,13 +445,13 @@ defmodule ExProto.Source.Exdrive do
 
   defp home(axis) do
     with {:ok, _} <- set_mode(axis, :homing) do
-      Exdrive.Drive.enable(axis)
+      EMotion.Axis.enable(axis)
       :ok
     end
   end
 
   defp set_mode(axis, mode) do
-    {:ok, Exdrive.Drive.set_mode(axis, mode)}
+    {:ok, EMotion.Axis.set_mode(axis, mode)}
   catch
     :exit, _reason -> {:error, :rejected}
   end
@@ -754,7 +754,7 @@ defmodule ExProto.Source.Exdrive do
   # ── Talking to the drive ──────────────────────────────────────────────────
 
   defp status(axis) do
-    {:ok, Exdrive.Drive.status(axis)}
+    {:ok, EMotion.Axis.status(axis)}
   catch
     :exit, {:noproc, _} ->
       # The model declares an axis no drive is running for. That is a wiring

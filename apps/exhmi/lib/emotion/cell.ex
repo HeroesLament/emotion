@@ -75,7 +75,7 @@ defmodule EMotion.Cell do
   Refused while the drive's output stage is on, by the drive itself.
   """
   def master_axis(axis_id, at \\ 0.0) do
-    with {:ok, offset} <- Exdrive.Drive.master(axis_id, at) do
+    with {:ok, offset} <- EMotion.Axis.master(axis_id, at) do
       record_mastering(axis_id, offset, "taught")
       {:ok, offset}
     end

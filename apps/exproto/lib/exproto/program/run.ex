@@ -439,8 +439,8 @@ defmodule ExProto.Program.Run do
 
     if length(joints) == length(chain.axis_ids) do
       for {axis_id, position} <- Enum.zip(chain.axis_ids, joints) do
-        Exdrive.Drive.set_mode(axis_id, :profile_position)
-        Exdrive.Drive.set_target_position(axis_id, position)
+        EMotion.Axis.set_mode(axis_id, :profile_position)
+        EMotion.Axis.set_target_position(axis_id, position)
       end
 
       :ok
@@ -548,7 +548,7 @@ defmodule ExProto.Program.Run do
       {:ok, %JointState{positions: positions}} ->
         Enum.zip(chain.axis_ids, positions)
         |> Enum.all?(fn {axis_id, position} ->
-          case Exdrive.Drive.status(axis_id) do
+          case EMotion.Axis.status(axis_id) do
             %{mode: :profile_position, target_position: target} ->
               abs(target - position) < @joint_tolerance
 

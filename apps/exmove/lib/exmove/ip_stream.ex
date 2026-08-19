@@ -90,7 +90,7 @@ defmodule ExMove.IpStream do
         |> Chain.joint_pairs()
         |> Enum.zip(positions)
         |> Enum.each(fn {{axis_id, _joint}, pos} ->
-          Exdrive.Drive.set_target_position(axis_id, pos)
+          EMotion.Axis.set_target_position(axis_id, pos)
         end)
         Process.send_after(self(), :tick, state.tick_ms)
         {:noreply, %{state | t: t, traj_state: new_traj_state}}

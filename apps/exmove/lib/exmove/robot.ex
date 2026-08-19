@@ -164,7 +164,7 @@ defmodule ExMove.Robot do
   end
 
   def handle_call({:execute_path, stream, opts}, _from, state) do
-    push   = fn axis_id, vel -> Exdrive.Drive.set_target_velocity(axis_id, vel) end
+    push   = fn axis_id, vel -> EMotion.Axis.set_target_velocity(axis_id, vel) end
     notify = Keyword.get(opts, :notify, nil)
     result = ExMove.PathExecutor.start_link(
       chain:  state.chain,

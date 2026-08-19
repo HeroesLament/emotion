@@ -62,23 +62,88 @@ own clock cannot be sub-stepped.
 
 ## The CiA 402 drive behaviour
 
-The contract every drive implements, real or simulated.
+The contract every drive implements, real or simulated. It lives in
+`apps/exdrive/lib/emotion/drive.ex`, and everything above it calls
+`EMotion.Axis`, which resolves an axis to its configured implementation and
+delegates.
 
 ```elixir
-defmodule EMotion.Drive do
-  @callback read(drive, index :: 0..0xFFFF, sub :: 0..255) ::
-              {:ok, term()} | {:error, term()}
-  @callback write(drive, index, sub, value :: term()) ::
-              :ok | {:error, term()}
-  @callback state(drive) :: EMotion.Drive.State.t()
-end
+@callback status(axis_id) :: status()
+@callback set_target_position(axis_id, float()) :: :ok
+@callback set_target_velocity(axis_id, float()) :: :ok
+@callback set_mode(axis_id, mode()) :: :ok | {:error, term()}
+@callback enable(axis_id) :: :ok
+@callback control_word(axis_id, 0..0xFFFF) :: :ok
+@callback quick_stop(axis_id) :: :ok
+@callback fault_reset(axis_id) :: :ok
+@callback master(axis_id, float()) :: :ok | {:error, term()}
+
+@callback set_target_torque(axis_id, float()) :: :ok   # optional
 ```
 
-Deliberately thin, and deliberately expressed in object-dictionary terms rather
-than robot terms. There is no `move_to/2` here. Motion is expressed by writing
-0x607A and toggling controlword bit 4, because that is what the real drive
-requires, and an abstraction hiding it would let controller code drift into
-shapes the hardware cannot honour.
+### This section used to say something else
+
+It proposed `read/3`, `write/4` and `state/1` — the whole contract in
+object-dictionary terms, on the argument that a robot-shaped abstraction would
+let controller code drift into shapes the hardware cannot honour. That argument
+was right. The shape was not.
+
+Three things decided against it.
+
+**A PWM actuator has no object dictionary.** Not a sparse one, not an emulated
+one — none. Satisfying `read(drive, 0x6041, 0)` would mean synthesising a status
+word out of nothing: a lie in the shape of an abstraction, and worse than no
+abstraction at all because it type-checks. The same objection applies more
+weakly to EtherCAT, where the dictionary is real but reached over CoE. Only
+CANopen fits `read/write` natively, and a contract that fits exactly one of its
+three intended implementations is not a contract, it is a rename.
+
+**The measured call sites disagreed.** Counting what the layers above actually
+call — across `exmove`, `exproto`, `exhmi` and `exdash` — produces the nine
+functions above and nothing else. Not one caller wanted a raw object. They
+wanted a setpoint, a mode, a state, and a stop.
+
+**Setpoints cannot be SDOs.** An SDO round trip was measured at ~1 ms on the
+bench. A 500 Hz loop over six axes has ~2 ms per cycle for everything. Writing
+0x607A per axis per cycle does not fit, by roughly an order of magnitude. The
+real implementation maps a setpoint to an RPDO, which is a frame with no
+acknowledgement — so `set_target_position/2` is asynchronous in the contract,
+because that is what the wire is, not because it was convenient.
+
+### What was kept from the old shape
+
+The worry about drift is answered by keeping the *vocabulary* rather than the
+*encoding*. `control_word/2`, `quick_stop/1`, `fault_reset/1` and `set_mode/2`
+are all still here, the state names are the PDS FSA state names, and a caller
+still has to walk the state machine. What is gone is only the requirement to
+spell every operation as a numbered object.
+
+And `read/3` and `write/4` were not discarded. They moved to
+`EMotion.Drive.ObjectDictionary`, a **separate, optional behaviour** that
+CANopen and EtherCAT drives implement and a PWM axis does not. Three things
+need it, none of them motion: commissioning, tuning, and the SDO tunnel in
+`protocol/METRONOME.md`. `EMotion.Drive.object_dictionary?/1` is how a caller
+finds out before assuming.
+
+### Two rules that are easy to get wrong
+
+**`status/1` is a read of last-known state, never a bus round trip.** A CANopen
+implementation answers it from its most recent TPDO. It is cheap, it always
+succeeds, and it may be stale by up to one cycle. It is not a synchronisation
+point, and code that treats it as one will work perfectly against the simulator.
+
+**Setpoints and `control_word/2` are asynchronous and confirm nothing.** A
+caller that needs to know the drive moved reads `status/1`. There is no
+acknowledgement to wait for, because on a real bus there is nothing sending one.
+
+### What is not in the contract
+
+`tick/2`. The simulator is driven by an explicit tick carrying a duration — see
+"Time is an input, never a side effect" above — but a real drive has its own
+clock. Putting `tick/2` in the contract would force every hardware
+implementation to grow a function that means nothing. It stays on
+`Exdrive.Drive`, where it is true.
+
 
 | Index  | Name                       | Notes                                   |
 |--------|----------------------------|-----------------------------------------|

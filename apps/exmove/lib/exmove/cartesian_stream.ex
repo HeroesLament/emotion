@@ -428,7 +428,7 @@ defmodule ExMove.CartesianStream do
     # joint at a time during the first tick, which would leave some joints
     # commanded and some not — a shape of motion nobody asked for.
     with :ok <- all_enabled(chain) do
-      Enum.each(chain.axis_ids, &Exdrive.Drive.set_mode(&1, :profile_velocity))
+      Enum.each(chain.axis_ids, &EMotion.Axis.set_mode(&1, :profile_velocity))
 
       # Zeros are written on the way out, including on an ordinary supervisor
       # shutdown. A stream that is stopped without them leaves six joints holding
@@ -534,7 +534,7 @@ defmodule ExMove.CartesianStream do
 
   @impl true
   def terminate(_reason, state) do
-    Enum.each(state.chain.axis_ids, &Exdrive.Drive.set_target_velocity(&1, 0.0))
+    Enum.each(state.chain.axis_ids, &EMotion.Axis.set_target_velocity(&1, 0.0))
     :ok
   end
 
@@ -1033,7 +1033,7 @@ defmodule ExMove.CartesianStream do
     chain.axis_ids
     |> Enum.zip(velocities)
     |> Enum.each(fn {axis_id, velocity} ->
-      Exdrive.Drive.set_target_velocity(axis_id, velocity)
+      EMotion.Axis.set_target_velocity(axis_id, velocity)
     end)
   end
 
@@ -1082,11 +1082,11 @@ defmodule ExMove.CartesianStream do
   # this costs a comparison, and the `set_mode` call only happens on the tick
   # where the mode is actually wrong.
   defp ensure_velocity_mode(_axis_id, %{mode: :profile_velocity}), do: :ok
-  defp ensure_velocity_mode(axis_id, _status), do: Exdrive.Drive.set_mode(axis_id, :profile_velocity)
+  defp ensure_velocity_mode(axis_id, _status), do: EMotion.Axis.set_mode(axis_id, :profile_velocity)
 
   defp all_enabled(chain) do
     Enum.reduce_while(chain.axis_ids, :ok, fn axis_id, :ok ->
-      case Exdrive.Drive.status(axis_id) do
+      case EMotion.Axis.status(axis_id) do
         %{state: :operation_enabled} -> {:cont, :ok}
         _not_enabled -> {:halt, {:error, :not_enabled}}
       end

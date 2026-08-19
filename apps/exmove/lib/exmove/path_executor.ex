@@ -12,7 +12,7 @@ defmodule ExMove.PathExecutor do
   Uses a **deadline scheduler** to prevent drift: each tick is scheduled
   against an absolute deadline rather than relative to the previous tick.
 
-      push = fn axis_id, vel -> Exdrive.Drive.set_target_velocity(axis_id, vel) end
+      push = fn axis_id, vel -> EMotion.Axis.set_target_velocity(axis_id, vel) end
 
       {:ok, pid} = ExMove.PathExecutor.start_link(
         chain:  chain,
@@ -37,7 +37,7 @@ defmodule ExMove.PathExecutor do
       def execute_path(robot_pid, stream) do
         chain = Robot.chain(robot_pid)
         seed  = Robot.state(robot_pid)
-        push  = fn id, vel -> Exdrive.Drive.set_target_velocity(id, vel) end
+        push  = fn id, vel -> EMotion.Axis.set_target_velocity(id, vel) end
         PathExecutor.start_link(chain: chain, seed: seed, stream: stream,
                                 push: push, notify: self())
       end

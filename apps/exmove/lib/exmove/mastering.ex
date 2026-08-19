@@ -51,7 +51,7 @@ defmodule ExMove.Mastering do
   to check six of them.
   """
   def read_axis(axis_id) do
-    case Exdrive.Drive.status(axis_id) do
+    case EMotion.Axis.status(axis_id) do
       status when is_map(status) ->
         case joint_position(status) do
           {:ok, position} -> {:ok, position, status}
@@ -105,7 +105,7 @@ defmodule ExMove.Mastering do
   end
 
   defp safe_status(axis_id) do
-    case Exdrive.Drive.status(axis_id) do
+    case EMotion.Axis.status(axis_id) do
       status when is_map(status) -> status
       _other -> nil
     end

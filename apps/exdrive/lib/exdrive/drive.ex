@@ -53,6 +53,7 @@ defmodule Exdrive.Drive do
   """
 
   @behaviour :gen_statem
+  @behaviour EMotion.Drive
 
   alias Exdrive.Cia402
 
@@ -143,6 +144,7 @@ defmodule Exdrive.Drive do
   end
 
   @doc "Send a raw CiA 402 control word (async)"
+  @impl EMotion.Drive
   def control_word(axis_id, cw) when is_integer(cw) do
     :gen_statem.cast(axis_name(axis_id), {:control_word, cw})
   end
@@ -167,6 +169,7 @@ defmodule Exdrive.Drive do
   event until it has initialised, and gen_statem replays postponed events on
   each state change, so the three transitions resolve in order on their own.
   """
+  @impl EMotion.Drive
   def enable(axis_id) do
     control_word(axis_id, 0x0006)   # → ready_to_switch_on
     control_word(axis_id, 0x0007)   # → switched_on
@@ -174,32 +177,39 @@ defmodule Exdrive.Drive do
   end
 
   @doc "Quick stop — decelerates to zero then disables"
+  @impl EMotion.Drive
   def quick_stop(axis_id),  do: control_word(axis_id, 0x0002)
 
   @doc "Reset a faulted drive"
+  @impl EMotion.Drive
   def fault_reset(axis_id), do: control_word(axis_id, 0x0080)
 
   @doc "Set mode of operation (object 0x6060)"
+  @impl EMotion.Drive
   def set_mode(axis_id, mode) when is_atom(mode) do
     :gen_statem.call(axis_name(axis_id), {:set_mode, mode})
   end
 
   @doc "Set target position — profile position and CSP modes"
+  @impl EMotion.Drive
   def set_target_position(axis_id, pos) do
     :gen_statem.cast(axis_name(axis_id), {:set_target_position, pos})
   end
 
   @doc "Set target velocity — profile velocity and CSV modes"
+  @impl EMotion.Drive
   def set_target_velocity(axis_id, vel) do
     :gen_statem.cast(axis_name(axis_id), {:set_target_velocity, vel})
   end
 
   @doc "Set target torque — profile torque and CST modes"
+  @impl EMotion.Drive
   def set_target_torque(axis_id, torque) do
     :gen_statem.cast(axis_name(axis_id), {:set_target_torque, torque})
   end
 
   @doc "Get current drive status (synchronous)"
+  @impl EMotion.Drive
   def status(axis_id) do
     :gen_statem.call(axis_name(axis_id), :status)
   end
@@ -211,8 +221,10 @@ defmodule Exdrive.Drive do
 
   # --- gen_statem callbacks -------------------------------------------------
 
+  @impl :gen_statem
   def callback_mode, do: [:state_functions, :state_enter]
 
+  @impl :gen_statem
   def init(opts) do
     data = %__MODULE__{
       axis_id:        Keyword.fetch!(opts, :axis_id),
@@ -281,6 +293,7 @@ defmodule Exdrive.Drive do
   records a position that was already stale when it was written. The firmware
   answers SDO abort 0x08000022 here; this answers `{:error, :output_enabled}`.
   """
+  @impl EMotion.Drive
   def master(axis_id, joint_zero_is \\ 0.0) when is_number(joint_zero_is) do
     :gen_statem.call(axis_name(axis_id), {:master, joint_zero_is})
   end
@@ -770,7 +783,7 @@ defmodule Exdrive.Drive do
   # where it is, which is the failure this whole subsystem exists to handle.
   # It also changes what a linked caller exiting normally does to the drive,
   # which the existing suite relies on.
-  @impl true
+  @impl :gen_statem
   def terminate(_reason, _state, data) do
     Exdrive.Flash.save(data.axis_id, data.actual_position)
     :ok
@@ -804,6 +817,7 @@ defmodule Exdrive.Drive do
   # Discipline: any time defstruct changes, add a clause here and bump @vsn.
   # Think of each clause as a database migration for live process state.
 
+  @impl :gen_statem
   def code_change(old_vsn, state, old_data, _extra) do
     new_data = migrate(old_vsn, old_data)
     {:ok, state, new_data}

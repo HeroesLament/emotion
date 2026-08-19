@@ -76,7 +76,7 @@ defmodule Mix.Tasks.Exmo.Controller do
     {:ok, table} = ExProto.Controller.node_table()
 
     for axis <- ExProto.Controller.axes(table) do
-      Exdrive.Drive.enable(axis)
+      EMotion.Axis.enable(axis)
     end
 
     Logger.info("all axes walked to operation_enabled")
