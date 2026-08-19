@@ -243,21 +243,41 @@ defmodule ExProto.Source.ProgramEditTest do
     assert Enum.map(body(prog), & &1["kind"]) == ["move_joint", "wait", "move_linear"]
   end
 
-  test "a reference given by name comes back rendered by name", %{prog: prog, point: point} do
+  test "a reference comes back structured, by name and by kind", %{prog: prog, point: point} do
     create!(prog)
     append!(prog, "move_linear", [arg("point", point)])
 
     assert [%{"refs" => refs}] = body(prog)
-    assert refs =~ point
+    assert refs == [%{"arg" => "point", "kind" => "point", "name" => point}]
   end
 
   test "a literal is coerced by its declared type", %{prog: prog} do
     create!(prog)
     append!(prog, "wait", [arg("seconds", "2")])
 
+    # "2" in, 2.0 out: the socket is declared a duration, so it parses as a
+    # number. The value travels as text either way — what it MEANS comes from
+    # the kind, never from guessing at the string.
     assert [%{"args" => args}] = body(prog)
-    assert args =~ "2.0"
+    assert args == [%{"name" => "seconds", "value" => "2.0"}]
   end
+
+  test "what show returns is what append accepts", %{prog: prog, point: point} do
+    # The round trip, which is the whole reason show carries structure: read a
+    # program, hand its arguments straight back, get the same statement. A
+    # rendering cannot do this, and an export that cannot do this is a picture
+    # of a program rather than a program.
+    create!(prog)
+    append!(prog, "move_linear", [arg("point", point), arg("feedrate", "0.25")])
+
+    assert [%{"args" => args, "kind" => kind}] = body(prog)
+    assert append!(prog, kind, args) == 1
+
+    assert [first, second] = body(prog)
+    assert first["args"] == second["args"]
+    assert first["refs"] == second["refs"]
+  end
+
 
   test "an unknown kind is refused", %{prog: prog} do
     create!(prog)

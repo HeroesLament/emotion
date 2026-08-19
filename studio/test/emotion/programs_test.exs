@@ -41,8 +41,18 @@ defmodule EMotion.ProgramsTest do
     {state, _} = Programs.select(state, 0)
 
     Programs.shown(state, [
-      %{"seq" => 0, "kind" => "move_joint", "refs" => "point=home", "args" => ""},
-      %{"seq" => 1, "kind" => "wait", "refs" => "", "args" => "seconds=1.0"}
+      %{
+        "seq" => 0,
+        "kind" => "move_joint",
+        "args" => [%{"name" => "point", "value" => "home"}],
+        "refs" => [%{"arg" => "point", "kind" => "point", "name" => "home"}]
+      },
+      %{
+        "seq" => 1,
+        "kind" => "wait",
+        "args" => [%{"name" => "seconds", "value" => "1.0"}],
+        "refs" => []
+      }
     ])
   end
 

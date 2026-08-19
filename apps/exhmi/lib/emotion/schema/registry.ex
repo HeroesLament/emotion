@@ -93,20 +93,31 @@ defmodule EMotion.Schema.Registry do
         id: "type.statement",
         name: "Statement",
         description:
-          "One statement of a program: what kind it is, what it references, and " <>
-            "its literal arguments rendered for a human.",
+          "One statement of a program: what kind it is, and every argument it " <>
+            "was given. Structure rather than a rendering, so a client can " <>
+            "reconstruct the statement rather than only display it — see " <>
+            "PROGRAMS.md \u00a7\"Why structure is authoritative and text is a " <>
+            "rendering\".",
         fields: [
           %ResultField{name: "seq", type: :int32, description: "Its place in the body, from zero"},
           %ResultField{name: "kind", type: :string, description: "Which statement kind"},
           %ResultField{
             name: "args",
-            type: :string,
-            description: "The literal arguments, rendered — feedrates, blends, durations"
+            type: {:array, {:ref, "type.statement_arg"}},
+            description:
+              "Every argument, literal and reference alike, in exactly the shape " <>
+                "`program.append` accepts. Handing this straight back reproduces " <>
+                "the statement, which is what makes a program exportable."
           },
           %ResultField{
             name: "refs",
-            type: :string,
-            description: "What it points at, by name — the point it moves to, and any via"
+            type: {:array, {:ref, "type.statement_ref"}},
+            description:
+              "What this statement depends on, by kind. Derived from the same " <>
+                "rows as `args`, so it cannot disagree \u2014 it exists so a client " <>
+                "can answer \"which points does this program use\" without " <>
+                "fetching the kind registry to find out which sockets are " <>
+                "references."
           }
         ]
       },
@@ -145,6 +156,24 @@ defmodule EMotion.Schema.Registry do
           %ResultField{name: "required", type: :boolean, description: "Whether it must be given"},
           %ResultField{name: "default", type: :string, description: "Its default, rendered, or empty"},
           %ResultField{name: "description", type: :string, description: "What it means"}
+        ]
+      },
+      "type.statement_ref" => %StructType{
+        id: "type.statement_ref",
+        name: "StatementReference",
+        description:
+          "A statement's dependency on something with its own life: a point, a " <>
+            "frame, a tool or another program. Travels by name because that is " <>
+            "what a person taught; the controller stores a foreign key, which " <>
+            "is what refuses the referent's deletion later.",
+        fields: [
+          %ResultField{name: "arg", type: :string, description: "The socket it fills"},
+          %ResultField{
+            name: "kind",
+            type: :string,
+            description: "What sort of thing: point, frame, tool or program"
+          },
+          %ResultField{name: "name", type: :string, description: "Which one, by name"}
         ]
       },
       "type.statement_arg" => %StructType{

@@ -36,6 +36,8 @@ defmodule EMotion.Programs do
   interface is lying to them, which is worse than a greyed-out button.
   """
 
+  alias EMotion.Program.Printer
+
   @typedoc "Something the shell should do. Returned, never performed."
   @type effect ::
           {:dialog, atom(), keyword()}
@@ -85,12 +87,11 @@ defmodule EMotion.Programs do
     current = running_statement(state)
 
     Enum.map(state.statements, fn s ->
-      seq = s["seq"]
-      marker = if seq == current, do: "▶", else: " "
-      refs = s["refs"] || ""
-      args = s["args"] || ""
-      detail = [refs, args] |> Enum.reject(&(&1 == "")) |> Enum.join("  ")
-      "#{marker} #{String.pad_leading(to_string(seq), 2)}  #{String.pad_trailing(to_string(s["kind"]), 12)} #{detail}"
+      marker = if s["seq"] == current, do: "▶", else: " "
+      # One renderer, in EMotion.Program.Printer, rather than a second copy
+      # here. Two renderings of the same thing is how KUKA ended up with editor
+      # metadata living in a comment.
+      "#{marker} #{String.pad_leading(to_string(s["seq"]), 2)}  #{Printer.statement(s)}"
     end)
   end
 

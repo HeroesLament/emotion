@@ -72,8 +72,8 @@ defmodule ExProto.Source.Program do
               %{
                 "seq" => statement.seq,
                 "kind" => statement.kind,
-                "args" => render_args(statement),
-                "refs" => render_refs(statement)
+                "args" => arguments(statement),
+                "refs" => references(statement)
               }
             end
 
@@ -345,17 +345,47 @@ defmodule ExProto.Source.Program do
   # Rendered rather than returned as a map, because a statement's arguments are
   # a different shape per kind and a typed protocol should not pretend otherwise.
   # The structured form is what the block editor will read, over HTTP.
-  defp render_args(statement) do
-    statement
-    |> Statement.args()
-    |> Enum.sort()
-    |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{value}" end)
+  # Every argument, literal and reference alike, in exactly the shape
+  # `program.append` accepts. That symmetry is the point: what `show` returns
+  # can be handed straight back, which is what makes a program exportable.
+  #
+  # This used to `map_join` into one string — "point=loop_home feedrate=0.125".
+  # Readable, and not reconstructible: a point named "weld start" re-parses as
+  # two arguments, and nothing says where one ends and the next begins.
+  # `PROGRAMS.md` §"Why structure is authoritative" is about exactly this
+  # failure, using KUKA's ;FOLD comments and UR's waypoint-less .script as the
+  # two ways to arrive at it. Rendering belongs in the client; the wire carries
+  # structure.
+  #
+  # Values stay text, which is not the same mistake. `type.statement_arg` says
+  # why: what a value MEANS is declared by the statement kind, so a `:duration`
+  # socket parses "0.3" as a number and a `:point` socket keeps "12" as a name.
+  # Losing the join loses nothing; guessing the type would.
+  defp arguments(statement) do
+    literals =
+      statement
+      |> Statement.args()
+      |> Enum.map(fn {name, value} -> %{"name" => name, "value" => to_string(value)} end)
+
+    referenced =
+      Enum.map(statement.refs, fn ref ->
+        %{"name" => ref.arg_name, "value" => referent_name(ref)}
+      end)
+
+    Enum.sort_by(literals ++ referenced, & &1["name"])
   end
 
-  defp render_refs(statement) do
+  # What this statement depends on, by kind. Derived from the same rows as
+  # `arguments/1`, so it cannot disagree with them — and it saves every client
+  # from having to fetch the kind registry just to answer "which points does
+  # this program use", which is the question an export has to answer first.
+  defp references(statement) do
     statement.refs
     |> Enum.sort_by(& &1.arg_name)
-    |> Enum.map_join(" ", fn ref -> "#{ref.arg_name}=#{referent_name(ref)}" end)
+    |> Enum.map(fn ref ->
+      {kind, _id} = StatementRef.referent(ref)
+      %{"arg" => ref.arg_name, "kind" => to_string(kind), "name" => referent_name(ref)}
+    end)
   end
 
   defp referent_name(ref) do
