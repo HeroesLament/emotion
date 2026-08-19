@@ -3,9 +3,12 @@
 Status: DECIDED (topology) / OPEN (the safety channel). Supersedes the
 single-bus arithmetic in `MVP-PLAN.md` §1.
 
-Decided: **separate CAN networks per joint group.** J1–J3 on one, J4–J6 on
-another, an effector segment, and possibly a further channel for
-keepalive/heartbeat with a redundant PHY.
+**DECIDED: three actuator buses, two drives each, 500 kbit/s.**
+`A = J1,J2` · `B = J3,J4` · `C = J5,J6`, plus an effector segment.
+The section *Settled: three actuator buses* below is the operative one; the
+two-bus working above it is kept because it is how the conclusion was reached,
+and because the reasoning about time bases and fault domains is unchanged by
+the count.
 
 
 ## What it buys, measured
@@ -178,15 +181,120 @@ differently** — or to the STO wire, which is the failure this is all trying to
 survive.
 
 
+## Settled: three actuator buses, two drives each, 500 kbit/s
+
+| | |
+|---|---|
+| bus A | J1, J2 |
+| bus B | J3, J4 |
+| bus C | J5, J6 |
+| bitrate | 500 kbit/s, fixed — the MKS boards do not go faster |
+| effector | its own segment |
+
+This supersedes the two-bus arithmetic above. What it settles, and what it
+moves:
+
+### It buys back 500 Hz, and leaves 250 Hz genuinely optional
+
+Per bus, `SYNC + RPDO1 + RPDO2 + TPDO1` for two axes, 8-byte guard:
+
+| rate | cyclic | load | acyclic window | frames/cycle |
+|---|---|---|---|---|
+| 500 Hz | 1345 µs of 2000 | 67 % | 399 µs | 1 (500/s) |
+| 250 Hz | 1345 µs of 4000 | 34 % | 2399 µs | 9 (2250/s) |
+
+Both work. The trade is not accuracy — at the ISO manual cap, 250 Hz already
+puts chord error at ~2.5 µm on a 50 mm arc, below what the joint encoder
+resolves — it is **acyclic headroom**. At 500 Hz a 27 kB reflash over the
+tunnel takes ~16 s and is bus-bound; at 250 Hz it takes ~5 s and is bound by
+USB instead, which is the right thing to be bound by.
+
+Recommendation: **run 250 Hz, and keep 500 Hz for when something asks for it.**
+The topology supports either without touching a cable, which is the point of
+having chosen it.
+
+### A two-node bus is the easiest CAN there is
+
+Worth crediting, because it is a real reliability gain rather than a
+consolation. Two nodes is one cable and two terminators: no stubs, no
+middle-node drop, no branch to get wrong in a drag chain. Three-node buses put
+a connector in the middle of the run.
+
+Against that, three buses is **three things that can stop the arm** — the fault
+domain is the arm, so any bus losing its cyclic stream quick-stops all of them.
+More buses, more failure points. The simpler topology per bus is roughly what
+pays for it; it is close to a wash and should be recorded as such rather than
+claimed as a win.
+
+### Node ids become memorable
+
+Two nodes a bus, and node ids are per-bus, so:
+
+```
+J1 = {A,1}   J3 = {B,1}   J5 = {C,1}
+J2 = {A,2}   J4 = {B,2}   J6 = {C,2}
+```
+
+Every bus is `1, 2`. LSS Fastscan on a two-node bus is trivial, and a fresh
+board can only ever collide with one sibling. `ExStore.Cell.JointSetting` needs
+`bus` and `node_id` beside `axis_id`; the value of `node_id` is now always 1 or
+2, which makes a mis-wired harness obvious rather than plausible.
+
+### The effector gets its own bus, and now there is a number for why
+
+Bus C carries J5 and J6 at 67 % at 500 Hz. Adding a CiA 401 node with one RPDO
+and one TPDO takes it to **82 %, and the acyclic window to zero** — no
+commissioning, no diagnostics, no gripper firmware update while the wrist
+moves. At 250 Hz it fits comfortably (41 %, 8 frames a cycle), but it still
+couples a third-party device's bus manners to the wrist's cyclic stream.
+
+So the effector segment is not a nicety. **Four CAN PHYs on the metronome**,
+minimum: A, B, C, effector — plus a fifth if the diagnostics channel happens.
+
+### The USB feedback record no longer fits, and the fix is a narrower velocity
+
+Six axes is six axes regardless of how they are grouped, so USB is unchanged by
+the split — but the numbers are tight enough to matter:
+
+| upstream record | size | one packet? |
+|---|---|---|
+| pos `i32` + vel `i32` + status `u16` | 68 B | **no** |
+| pos `i32` + vel `i16` scaled + status `u16` | **56 B** | yes |
+| pos `i32` + status `u16` | 44 B | yes |
+
+The obvious escape — drop velocity and differentiate position at the host — is
+the noise-budget mistake `Params::DEFAULT`'s `obs_bw_hz` note already records
+making once. The better one is to **narrow velocity to a scaled `i16`**:
+counts/ms rather than counts/s puts 1500 RPM at 1,638, comfortably inside
+±32,767 with two orders of magnitude spare.
+
+That makes the whole six-axis feedback record 56 bytes — one packet, 44 % of
+the pipe at 500 Hz, 22 % at 250 Hz. Downstream, a six-axis waypoint is the same
+56 bytes and the same 44 %. Both directions sit at under half the link with the
+tunnel sharing the rest.
+
+### What stays open
+
+The bitrate ceiling itself is worth one bench measurement, not to relitigate
+the topology — which is right at either bitrate — but because the register
+arithmetic does not obviously agree with it. `BTR_500K_PCLK16 = 0x001C_0001` is
+BRP ÷2, tq 125 ns, 16 tq a bit at PCLK1 16 MHz. 1 Mbit/s is the same segments
+with BRP ÷1: `0x001C_0000`, identical 87.5 % sample point, one constant. If the
+real limit is the transceiver, the harness or measured error rate, that is
+worth writing down where the next person will find it — and if it is soft, this
+same cabling runs at 500 Hz and 34 % instead of 67 %.
+
+
 ## Open
 
-1. **Bitrate.** 500 kbit/s ships today and gives 250 Hz at half a bus.
-   1 Mbit/s gives 500 Hz at half a bus and costs an LSS pass per drive.
-   Bench-measure the frame time before choosing; the arithmetic above is
-   arithmetic.
-2. **The segment wire encoding**, which does not exist. E-Motion should propose
+1. ~~**Bitrate.**~~ Settled at 500 kbit/s: the MKS boards do not go faster.
+   One bench measurement is still worth taking (see the end of the topology
+   section) but nothing downstream waits on it.
+2. ~~**How many PHYs.**~~ Four minimum: A, B, C, effector. The effector does
+   not share bus C; there is a number for that now.
+3. **Cycle rate: 250 Hz or 500 Hz.** Both fit. 250 Hz is recommended and
+   nothing is committed to it.
+4. **The segment wire encoding**, which does not exist. E-Motion should propose
    it; `servo-rs` implements mode 7 against it.
-3. **How many PHYs the metronome carries**, and whether the effector shares the
-   wrist bus for V1.
-4. **Where STO physically lands** on the MKS boards — enable input, or a
+5. **Where STO physically lands** on the MKS boards: enable input, or a
    contactor in the bus supply.
