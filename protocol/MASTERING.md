@@ -220,6 +220,12 @@ thing when something does.
 * **No axis-level property.** `axes.jN.mastering` would let a pendant colour a
   single joint without calling `cell.mastering`. The cell-level report covers
   the need for now.
+* **A swap is inferred, not reported.** `compare/3` can say an axis's number
+  changed; it cannot say a board was replaced. FANUC's encoders carry identity
+  and their controller alarms on a mismatch, which is why a swapped arm faults
+  there and would be silent here. `servo-rs` already derives LSS serials from
+  the MCU UID, so the identity exists and is not read — see `INSTALLATION.md`.
+
 * **The audit only logs.** An operator confirmation before the first program
   runs after a `{:changed, ...}` finding is the version that actually stops the
   bad part being made.

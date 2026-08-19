@@ -41,6 +41,26 @@ are boring until they are wrong. But one describes a *model* of arm and the
 other describes *this* arm, and copying the second between two arms of the same
 model produces a machine that runs cleanly and works in the wrong place.
 
+### "This unit" is at least two units
+
+Added after a second pass over the vendors, because the first draft quietly
+assumed a machine is one thing. It is not: **an arm and a control box are
+separately swappable, and a per-unit fact belongs to one or the other.**
+
+ABB puts its Absolute Accuracy compensation file in the *controller* and
+markets exactly that as making robots exchangeable. UR puts its factory
+kinematic calibration on the *arm*, and you extract it from there. Same
+category of fact, opposite homes, and each vendor's failure mode follows from
+which they chose.
+
+For an Arctos this resolves in our favour and for a reason `MASTERING.md`
+already gives: the MKS board is bolted to the joint, so the offset is "a
+property of this board bolted to this motor bolted into this joint" and travels
+with the arm. Nothing has to be done about it today. But the controller's
+database is separate hardware from the arm, and a document that does not say so
+is one migration away from someone restoring a control box and assuming the arm
+came with it.
+
 
 ## Points travel with the program. This is not obvious and both vendors agree.
 
@@ -127,6 +147,33 @@ So the arrangement here sits between them deliberately:
   one is a different verb with its own grant.
 
 
+### A second pass, over three vendors
+
+The three-category split survived. Two details did not.
+
+**All three separate the encoder zero from the kinematic correction**, with
+different data, a different procedure and a different tool for each. ABB
+recalibrates resolver offsets with a Calibration Pendulum after maintenance,
+while the Absolute Accuracy parameters arrive as a factory file for the
+controller. FANUC keeps mastering in `$MASTER_COUNTS` and `sysmast.sv`, apart
+from accuracy compensation. The two verbs above were arrived at independently
+three times, which is about as much confirmation as a design decision gets.
+
+**FANUC's field practice is this document, reached the other way round.** The
+guidance for an arm swap is to restore *only* mastering data and never a full
+controller image; `sysmast.sv` exists as a separate artifact for exactly that.
+Restoring an image onto different hardware gives joint-angle mismatches and
+SRVO-062/275 alarms. We got to "in the backup, not in the restore" by reasoning
+about a silent failure. They got there by having it.
+
+**And FANUC faults where we are silent, which is not inevitable.** Those alarms
+fire because FANUC's absolute encoders carry identity — the encoder says which
+one it is, so a mismatch is *detected* rather than inferred. "Nothing faults.
+You find out at the workpiece" describes our situation, not the state of the
+art. See the open items below: `servo-rs` already derives LSS serials from the
+MCU UID, so binding a mastering record to a board identity would turn a swapped
+board from something reasoned about into something reported.
+
 ## The artifacts
 
     .emp   a program        statements + the points they name
@@ -166,27 +213,39 @@ inventing a fixture at the origin.
 ## Not covered, and named so it is not designed out
 
 * **Per-unit kinematic correction.** We have nowhere to put this arm's deviation
-  from nominal link geometry. `robots` and `joint_settings` describe a model;
-  UR's factory calibration and KUKA's `$ROBCOR.DAT` describe a unit. This
-  compounds `PROGRAMS.md` gap 1 — the chain is `ExMove.Library.demo()`,
-  compile-time, so "half the cell's geometry lives in a database and half lives
-  in a release" — and the gap is larger than it first reads: it is not only that
-  the chain is not a row, it is that there is no row for the *difference*
-  between the nominal chain and this arm.
+  from nominal. `robots` and `joint_settings` describe a model; UR's factory
+  calibration and KUKA's `$ROBCOR.DAT` describe a unit. This compounds
+  `PROGRAMS.md` gap 1 — the chain is `ExMove.Library.demo()`, compile-time, so
+  "half the cell's geometry lives in a database and half lives in a release" —
+  and the gap is larger than it first reads: it is not only that the chain is
+  not a row, it is that there is no row for the *difference* between the
+  nominal chain and this arm.
+
+  **And the slot is not six numbers per joint.** ABB's Absolute Accuracy
+  compensates "mechanical properties as well as deflection due to load (adopts
+  to tool data)" — the correction takes the fitted tool as an input, because an
+  arm holding a welder at full reach sags. Designing this as a static per-joint
+  transform would design out the half that matters at the end of a long arm,
+  and it would be discovered by a weld that is right near the base and wrong at
+  the far corner of the fixture.
 
   For a printed Arctos this may stay theoretical: part tolerance plausibly
-  swamps a calibration term, and there is no metrology to measure one with. The
-  slot should exist anyway. A machine that later gets measured should not need a
-  migration to record the result.
+  swamps a geometric term, and there is no metrology to measure one with. The
+  slot should exist anyway, shaped to take a load as well as a pose. A machine
+  that later gets measured should not need a migration to record the result.
 
-* **Restore of a mastering offset.** Already on `MASTERING.md`'s open list:
-  "the shadow can describe what a replacement board should be given; nothing
-  writes it back yet. That wants `0x607C` on the real drive and a deliberate,
-  grant-gated action here."
+* **Board identity, so a swap is reported rather than inferred.** `compare/3`
+  can tell that an axis's number changed; it cannot tell *why*. FANUC's
+  encoders carry identity and their controller raises SRVO-062/275 on a
+  mismatch, which is why a swapped arm alarms there and would be silent here.
 
-* **Installation import.** Export first, because a read-only backup is
-  immediately useful and cannot damage anything. Import after, and the per-unit
-  section of an import is inert until the separate verb is built.
+  `servo-rs` already derives LSS serials from the MCU UID, so the identity
+  exists and is not read. Recording it alongside the offset would turn
+  `{:changed, axis, was, now}` into `{:board_swapped, axis, was_serial,
+  now_serial}` — a different finding wanting a different response, and the one
+  case where `restore_mastering` is the correct next action rather than a
+  question. Cross-repo: the drive has to report it before the controller can
+  store it.
 
 * **Multi-robot cells.** One installation per controller is assumed throughout.
   A controller aggregating several arms has one cell and several units, which
@@ -210,3 +269,26 @@ inventing a fixture at the origin.
 * **Two arms of the same model can share a cell and a robot model and nothing
   else.** Export from one, import to the other, and assert frames, tools and
   joint settings arrived and mastering did not.
+* **A restore onto an arm that already knows its zero is refused.** Not
+  "discouraged" and not "logged": refused, so the stale push cannot be
+  performed by someone who has not read this document.
+
+## What has since been built
+
+Recorded here rather than left implied, so the open list above stays a list of
+things that are actually open.
+
+* `cell.installation` — the whole snapshot in one read, behind `backup`, and
+  `.emi` as its file. One call rather than four, because five round trips can
+  straddle a change and a fingerprint over that is worse than none.
+* Import — `plan/2` before `install/2`, frames before tools before joints,
+  parents before children. Mastering and the robot description skipped **with
+  reasons carried**, because a skip an operator cannot see is a skip they will
+  assume did not happen.
+* `cell.define_point` — a point that arrived from a file, marked `defined`
+  rather than `taught`, with the joint vector required and never solved for.
+* The program push, refusing whole when the cell lacks a frame or tool it
+  names.
+* `cell.restore_mastering` — per axis, behind `restore`, and refused unless the
+  axis is unmastered. That last clause is what makes the failure this document
+  is about unreachable rather than merely documented.
