@@ -130,6 +130,195 @@ moves **into the metronome or into the drive**, and the host's role stays
 latency bug.
 
 
+## The acyclic tunnel
+
+### First, three protocols, not one
+
+"An LSS tunnel for SDOs" is two different things wearing one name, and the
+difference decides the addressing:
+
+| | COB-ID | addressed by | what it is for |
+|---|---|---|---|
+| **NMT** | `0x000` | node id, or 0 for all | start/stop/reset a node |
+| **SDO** | `0x600+node` → / `0x580+node` ← | **node id** | read or write any object by index/subindex |
+| **LSS** | `0x7E5` → / `0x7E4` ← | **nothing — that is the point** | give an unconfigured node its id and bitrate |
+
+LSS exists precisely for the case where there is no node id yet: a factory-fresh
+`servo-rs` board parks at `0xFF` and answers only LSS. So the tunnel cannot be
+"an SDO tunnel with LSS on top" — LSS is a peer, and it has to work when SDO
+cannot.
+
+What the host actually needs to send down the tunnel:
+
+* SDO — mastering (`0x2002`), parameter save (`0x1010`), restore (`0x1011`),
+  identity (`0x1018`), mapping discovery (`0x1600`/`0x1A00`), home offset
+  (`0x607C`), firmware download (`0x1F51`);
+* LSS — Fastscan and node-id assignment on a fresh board;
+* NMT — bring a bus operational, reset a node.
+
+And what comes back unbidden, which the tunnel must also carry **up**: EMCY
+(`0x080+node`) and heartbeat (`0x700+node`).
+
+
+### The design fork: raw frames, or services
+
+**Service tunnel** — the host says "write 0x2002:02 = 0x7274736D on bus 1 node
+3" and the metronome runs the SDO client: segmentation, timeouts, aborts,
+retries.
+
+**Raw frame tunnel** — the host says "put these bytes on bus 1 as COB-ID 0x603"
+and reads back what arrived. The SDO and LSS state machines live in Elixir.
+
+**Take the raw frame tunnel.** The reasons compound:
+
+* The SDO client is the fiddly part — segmented and block transfer, abort code
+  interpretation, the CANopen wart that **responses carry no transaction id**
+  (they are matched by COB-ID and index/subindex alone, so a retry can be
+  answered by the previous attempt's response). That belongs where it can be
+  tested in milliseconds, not in a bitstream.
+* It is protocol-agnostic by construction: LSS, NMT, EMCY, heartbeat and
+  anything CiA 401 adds for I/O all ride the same mechanism with no new RTL.
+* The RTL reduces to something small enough to be obviously correct: a queue
+  per bus, a classifier, and one scheduling rule.
+
+The cost is a USB round trip per SDO segment, which sounds bad and is not:
+
+| | |
+|---|---|
+| firmware image | 27,320 B |
+| segmented SDO download | 3,903 segments of 7 bytes |
+| at 1 ms round trip | **~3.9 s** |
+| at 2 ms round trip | ~7.8 s |
+
+Four seconds to reflash a drive, over the tunnel, with no special path. That is
+faster than the operator can find the cable.
+
+
+### The scheduling rule, which is the whole of the RTL
+
+A cycle is: SYNC, then the cyclic burst, then whatever time is left.
+
+```
+|<------------------ SYNC period ------------------>|
+ SYNC | RPDO1 x3 | RPDO2 x3 | ...TPDOs... | acyclic | guard |
+```
+
+The metronome knows the cyclic burst's duration exactly — the mapping is fixed
+and the axis count is fixed — so it admits an acyclic frame only when
+
+```
+now + longest_acyclic_frame + margin  <  next_SYNC
+```
+
+**The guard band is not optional and it is not about fairness.** CAN cannot
+preempt a frame in flight, so a frame started too late is still on the wire when
+SYNC is due, and SYNC is the thing every drive's cycle is anchored to. The
+longest acyclic frame is an 8-byte frame: 255 µs at 500 kbit/s, 128 µs at
+1 Mbit/s. One comparison, and it is the only timing rule in the tunnel.
+
+Arbitration does the rest for free, which is a good reason to use the standard
+COB-IDs and invent nothing: an SDO request is `0x600+node` and a PDO is
+`0x180`–`0x3FF`, so a lower ID always wins the bus. Even a queued acyclic frame
+loses to a PDO without anybody arranging it.
+
+### What that leaves, measured
+
+Three axes a bus, RPDO1+RPDO2+TPDO1 cyclic, an 8-byte guard:
+
+| bitrate | rate | cyclic | acyclic window | frames/s |
+|---|---|---|---|---|
+| 500 kbit/s | 500 Hz | 1964 µs of 2000 | **none** | 0 |
+| 500 kbit/s | 250 Hz | 1964 µs of 4000 | 1781 µs | ~1,500 |
+| 1 Mbit/s | 500 Hz | 982 µs of 2000 | 890 µs | ~3,000 |
+| 1 Mbit/s | 250 Hz | 982 µs of 4000 | 2890 µs | ~5,500 |
+
+The first row is the finding. **At 500 kbit/s and 500 Hz there is no acyclic
+window at all** — the bus is not merely 98 % busy, it is unusable for anything
+else. No commissioning, no mastering, no diagnostics while the arm runs. That
+turns the bitrate question from a performance preference into a capability one:
+**500 Hz requires 1 Mbit/s**, or 250 Hz is the ceiling.
+
+The USB side caps out at roughly 5 frames per 64-byte packet per millisecond,
+so above 1 Mbit/s the pipe, not the bus, is the limit — which is the right way
+round.
+
+
+### Framing
+
+64-byte packets, one type byte, so all three channels share two endpoints:
+
+```
+0      u8   type    0x01 cyclic  0x02 acyclic  0x03 control
+1      u8   bus     0..N-1  (ignored for cyclic: a window spans every bus)
+2..3   u16  seq     wraps; a gap is a gap, not a jump
+4..63  payload
+```
+
+An acyclic payload is a list of CAN frames, 12 bytes each — five per packet:
+
+```
+0..1   u16  cob_id  (11-bit, top bits carry RTR/extended if ever needed)
+2      u8   dlc
+3      u8   flags
+4..11  u8   data[8]
+```
+
+Upstream is the same shape with a timestamp, so the host can measure the bus
+rather than guess at it.
+
+### What the metronome does NOT do
+
+No SDO state machine. No timeouts. No abort interpretation. No retries. No
+knowledge of what any index means. It is a **scheduled multiplexer**: classify
+by COB-ID, queue per bus, admit inside the window, forward everything else up.
+
+The one piece of policy it does own is backpressure — a bounded queue per bus,
+with depth reported on the control channel, and **overflow drops the acyclic
+frame rather than delaying a cyclic one**. A commissioning tool that is slow is
+correct; a commissioning tool that makes the arm stutter is not.
+
+
+### The mode nobody plans for: commissioning
+
+LSS runs *before* a node has an id, so it runs before the cyclic engine can
+address that node at all. A SYNC-anchored cyclic engine pointed at a bus of
+unconfigured drives has nothing to talk to.
+
+So each bus needs two modes:
+
+* **commissioning** — no SYNC, no cyclic traffic, tunnel only. LSS Fastscan,
+  node-id assignment, identity, firmware download.
+* **operational** — cyclic engine running, tunnel admitted inside the guard.
+
+Per bus, not per fleet: a replacement board on the wrist harness should be
+commissionable while the shoulder bus is still holding position. That is only
+true because the buses are separate, which is one more thing the split bought.
+
+
+## What belongs in the RTL: the rule, and mastering as the worked example
+
+**Deadline, not difficulty.** A thing lives in the metronome if its deadline is
+shorter than the USB round trip. Everything else lives on the host, where it can
+be changed without a bitstream and tested without a bench.
+
+Mastering splits cleanly along that line, and it splits three ways rather than
+two:
+
+| | where | why |
+|---|---|---|
+| mastering **state** | already cyclic, free | statusword bits 14/15 ride TPDO1; the metronome sees it every cycle without asking |
+| mastering **fault reaction** | **RTL** | a reference lost mid-run must stop the arm now, in the same fault domain as a bus drop — no host round trip |
+| mastering **command and policy** | host | a dozen times in a machine's life, no deadline, all judgement, 34 tests that run in 0.2 s |
+
+The third row is what an "API in RTL" would be, and it is the row with no
+deadline in it. It is also the row that generalises straight into parameter
+save, identity, LSS and a 27 kB firmware download — at which point the SDO
+engine exists anyway and baking any single command was work done twice.
+
+The second row is currently **missing from this design** and should not be:
+losing a reference mid-run is a fault, and faults belong to the metronome.
+
+
 ## Consequences for the plan
 
 `MVP-PLAN.md` §1 ordered the CAN work as if the host drove the bus. Corrected:
@@ -144,6 +333,9 @@ latency bug.
    now clearly the same work for both the CAN budget and the metronome.
 4. **`ExDrive.Axis` behaviour** — still item zero, and now with a third
    implementation in view: simulator, direct CANopen, metronome.
+5. **Mid-run reference loss joins the metronome's fault domain.** Missing from
+   the mastering work, which put every refusal at admission; a reference lost
+   while the arm is moving is a fault, and faults do not wait for the host.
 
 The `joint_settings` addition is unchanged but gains a field: an axis is
 `{bus, node_id}`, and the bus is now a port on the metronome.
@@ -154,6 +346,9 @@ The `joint_settings` addition is unchanged but gains a field: an axis is
 1. **Full speed or high speed.** Everything above assumes 64 B/ms. Measure it.
 2. **Look-ahead depth**, and whether it is fixed or negotiated at attach.
 3. **Feedback rate and content** — 500 Hz with velocity, or 1 kHz without.
-4. **Where STO physically lands** on the MKS boards: enable input, or a
+4. **Bitrate is now a capability question, not a preference.** At 500 kbit/s
+   and 500 Hz there is no acyclic window at all, so 500 Hz requires 1 Mbit/s
+   or the ceiling is 250 Hz. Bench-measure the frame time and settle it.
+5. **Where STO physically lands** on the MKS boards: enable input, or a
    contactor in the bus supply. Still the most important unanswered hardware
    question in the project.
