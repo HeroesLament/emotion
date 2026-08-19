@@ -128,6 +128,9 @@ would make opening a file a way to change a machine.
     a cached copy ───push/pull───►  execution
     simulation, preview             the queue
 
+What is in each artifact — and the third category of thing that belongs to one
+serial number and must never be copied between arms — is `INSTALLATION.md`.
+
 Studio's own storage is SQLite and is nobody else's business. Note that
 `studio/mix.exs` currently justifies depending on `exlink` rather than `exproto`
 partly on the grounds that the latter "would drag in the OPC UA server, SQLite

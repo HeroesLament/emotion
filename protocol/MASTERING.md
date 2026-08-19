@@ -225,4 +225,5 @@ thing when something does.
   bad part being made.
 * **Restore is not wired.** The shadow can describe what a replacement board
   should be given; nothing writes it back yet. That wants `0x607C` on the real
-  drive and a deliberate, grant-gated action here.
+  drive and a deliberate, grant-gated action here. `INSTALLATION.md` records why
+  it is a separate verb from restoring an installation rather than part of one.
