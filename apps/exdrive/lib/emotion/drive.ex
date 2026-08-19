@@ -210,9 +210,30 @@ defmodule EMotion.Drive do
   """
   @spec for(axis_id()) :: module()
   def for(axis_id) do
-    :exdrive
-    |> Application.get_env(:drives, %{})
-    |> Map.get(normalize_id(axis_id), default_impl())
+    case lookup_key(axis_id) do
+      {:ok, key} -> Map.get(drives(), key, default_impl())
+      :error -> default_impl()
+    end
+  end
+
+  defp drives, do: Application.get_env(:exdrive, :drives, %{})
+
+  # Resolution is total on purpose, and this is a correction rather than a
+  # convenience. It first used `normalize_id/1` directly, which raises on a
+  # binary that names no atom — and that took the whole controller down at boot
+  # the first time it met `ExProto.Controller.axes/1` handing over "cartesian",
+  # a node id that maps to no drive.
+  #
+  # Resolving an axis to a module is not the place that validates identity. A
+  # caller asking about an axis that does not exist should get the default and
+  # then fail on the actual operation, where the error names the operation. A
+  # lookup that raises turns one bad node id into no controller at all.
+  defp lookup_key(id) when is_atom(id), do: {:ok, id}
+
+  defp lookup_key(id) when is_binary(id) do
+    {:ok, String.to_existing_atom(id)}
+  rescue
+    ArgumentError -> :error
   end
 
   @doc "The module used for any axis without an explicit mapping."

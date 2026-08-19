@@ -90,16 +90,35 @@ defmodule ExProto.Controller do
   an axis does not need this module edited — and cannot end up with a node that
   has no drive because someone updated one list and not the other.
   """
+  # What makes a node under `axes` an actual drive.
+  #
+  # This used to match any `axes.<x>.<field>` property, which meant `axes.tcp`
+  # and `axes.cartesian` were reported as axes and started as drives —
+  # `MVP-PLAN.md` recorded it as harmless against a simulator and wrong against
+  # a bus, where it means two node ids that map to no hardware. It stopped being
+  # harmless when `EMotion.Drive` arrived: resolving the phantom axis
+  # "cartesian" raised at boot and took the controller with it.
+  #
+  # `pds_state` is the discriminator because it is the CiA 402 Power Drive
+  # System state, and nothing that is not a drive has one. `axes.tcp` carries a
+  # pose (x, y, z, rx, ry, rz); `axes.cartesian` carries stream state
+  # (manipulability, speed_fraction, reason). Neither can grow a PDS state
+  # without becoming a drive, which is what makes this a property of the thing
+  # rather than a list to maintain.
+  @drive_marker "pds_state"
+
   def axes(table) do
     table
     |> JSONRPC.filter(:property)
     |> Enum.flat_map(fn node ->
       case String.split(node.node_id, ".") do
-        ["axes", axis, _field] -> [axis]
+        ["axes", axis, field] -> [{axis, field}]
         _ -> []
       end
     end)
-    |> Enum.uniq()
+    |> Enum.group_by(fn {axis, _field} -> axis end, fn {_axis, field} -> field end)
+    |> Enum.filter(fn {_axis, fields} -> @drive_marker in fields end)
+    |> Enum.map(fn {axis, _fields} -> axis end)
     |> Enum.sort()
   end
 

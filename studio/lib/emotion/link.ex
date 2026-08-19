@@ -54,6 +54,10 @@ defmodule EMotion.Link do
   # or a hostile one, and either deserves a refusal rather than a chain.
   @max_axes 64
 
+  # What makes a node under `axes` an axis: a CiA 402 Power Drive System state.
+  # See `browse_axes/1`.
+  @drive_marker "pds_state"
+
   defstruct [
     :profile,
     :session,
@@ -325,12 +329,29 @@ defmodule EMotion.Link do
 
   # The axes the controller declares, in its order. Taken from the model rather
   # than assumed, so a five-axis machine draws five joints.
+  #
+  # Not every object under `axes` is an axis. `axes.tcp` is where the tool is —
+  # a pose, x/y/z/rx/ry/rz. `axes.cartesian` is the state of the cartesian
+  # stream. Neither can be commanded to a joint position and neither has one.
+  # Taking every object here is how this connected to a healthy controller and
+  # then failed the handshake asking to subscribe to `axes.tcp.position`.
+  #
+  # The discriminator is `pds_state` — the CiA 402 Power Drive System state.
+  # Nothing that is not a drive has one, and a drive cannot lack one, which
+  # makes it a property of the thing rather than a list of names to keep in
+  # sync with the controller. `ExProto.Controller.axes/1` uses the same rule on
+  # the other side of the wire for the same reason.
+  #
+  # It costs one browse per candidate, at connect only. The alternative is
+  # trusting a name, and a client that believes anything called `axes.<x>` can
+  # be jogged will be wrong in front of the first controller that publishes
+  # something else there.
   defp browse_axes(session) do
     case ExLink.request(session, "nodes/browse", %{"nodeId" => "axes"}) do
       {:ok, session, %{"result" => %{"children" => children}}} ->
-        axes =
+        candidates =
           children
-          |> Enum.filter(&(&1["class"] == "object"))
+          |> Enum.filter(&(&1["class"] == "object" and &1["hasChildren"] == true))
           |> Enum.map(fn child ->
             %{
               node_id: child["nodeId"],
@@ -339,10 +360,18 @@ defmodule EMotion.Link do
             }
           end)
 
-        cond do
-          axes == [] -> {:error, :no_axes}
-          length(axes) > @max_axes -> {:error, {:too_many_axes, length(axes)}}
-          true -> {:ok, session, axes}
+        # Bound the probing too, not just the result: a controller declaring
+        # ten thousand objects should cost ten thousand nothings, not ten
+        # thousand round trips.
+        if length(candidates) > @max_axes do
+          {:error, {:too_many_axes, length(candidates)}}
+        else
+          {session, axes} = keep_drives(session, candidates)
+
+          cond do
+            axes == [] -> {:error, :no_axes}
+            true -> {:ok, session, axes}
+          end
         end
 
       {:ok, _session, %{"error" => error}} ->
@@ -350,6 +379,29 @@ defmodule EMotion.Link do
 
       other ->
         other
+    end
+  end
+
+  defp keep_drives(session, candidates) do
+    Enum.reduce(candidates, {session, []}, fn candidate, {session, kept} ->
+      case drive?(session, candidate) do
+        {session, true} -> {session, kept ++ [candidate]}
+        {session, false} -> {session, kept}
+      end
+    end)
+  end
+
+  defp drive?(session, %{node_id: node_id}) do
+    case ExLink.request(session, "nodes/browse", %{"nodeId" => node_id}) do
+      {:ok, session, %{"result" => %{"children" => children}}} ->
+        {session, Enum.any?(children, &(&1["nodeId"] == "#{node_id}.#{@drive_marker}"))}
+
+      {:ok, session, _other} ->
+        # A candidate we cannot describe is not one we will command.
+        {session, false}
+
+      _other ->
+        {session, false}
     end
   end
 

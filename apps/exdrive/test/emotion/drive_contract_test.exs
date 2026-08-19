@@ -70,6 +70,21 @@ defmodule EMotion.DriveContractTest do
       assert Drive.for(:j1) == Exdrive.Drive
     end
 
+    test "an axis id that names no atom resolves to the default rather than raising" do
+      # Found live, not in a test: ExProto.Controller.axes/1 handed over
+      # "cartesian" at boot, String.to_existing_atom raised inside for/1, and
+      # the whole controller died. Resolution is not the place that validates
+      # identity — the operation is.
+      assert Drive.for("no_such_axis_at_all_#{System.unique_integer([:positive])}") ==
+               Exdrive.Drive
+    end
+
+    test "resolution stays total even with a configured map" do
+      Application.put_env(:exdrive, :drives, %{gripper: Stub})
+      assert Drive.for("definitely_not_an_axis_#{System.unique_integer([:positive])}") ==
+               Exdrive.Drive
+    end
+
     test "a binary axis id resolves the same as its atom" do
       # This is the bug class that hit Exdrive.Flash live and that no test
       # could see, because every test started drives the same way it looked
