@@ -183,6 +183,30 @@ defmodule ExProto.Source.Cell do
   # `tools` describe a cell, and `mastering` describes THIS unit and must never
   # be written onto another one. The wire cannot enforce that; it can at least
   # not pretend they are the same kind of thing.
+  # One joint's commissioning. The write half of `cell.installation`, for the
+  # one part of an installation that had no way in.
+  #
+  # Per joint rather than per installation, because the refusals are per joint
+  # — a soft limit outside the mechanical travel is a fact about that joint,
+  # and an all-or-nothing call would have to either abandon six good joints for
+  # one bad one or report a partial success as success.
+  def call("cell.commission", args, _arg) do
+    with {:ok, joint} <- string(args, "joint"),
+         {:ok, robot} <- active_robot() do
+      attrs =
+        for key <- ~w(axis max_vel max_acc soft_lower soft_upper home),
+            value = Map.get(args, key),
+            value not in [nil, ""],
+            into: %{},
+            do: {key, value}
+
+      case Robots.commission(robot, joint, attrs) do
+        {:ok, _setting} -> {:ok, %{"joint" => joint}}
+        {:error, _changeset} -> {:error, :rejected}
+      end
+    end
+  end
+
   def call("cell.installation", _args, _arg) do
     robot = Robots.active()
 
@@ -367,6 +391,20 @@ defmodule ExProto.Source.Cell do
   # A controller with no active robot is a controller nobody commissioned. That
   # is a real state and it backs up as empty rather than failing — a backup of a
   # half-built machine is exactly when you want one.
+  defp active_robot do
+    case Robots.active() do
+      nil -> {:error, :rejected}
+      robot -> {:ok, robot}
+    end
+  end
+
+  defp string(args, key) do
+    case Map.get(args, key) do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, :rejected}
+    end
+  end
+
   defp robot_map(nil), do: %{"name" => "", "urdf" => ""}
   defp robot_map(robot), do: %{"name" => robot.name, "urdf" => robot.urdf || ""}
 

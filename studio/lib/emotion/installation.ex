@@ -266,6 +266,201 @@ defmodule EMotion.Installation do
     installation |> name() |> String.replace(~r/[^A-Za-z0-9_.-]+/, "_") |> Kernel.<>(".emi")
   end
 
+  # ── Restoring ─────────────────────────────────────────────────────────────
+
+  @doc """
+  What installing this backup would do, without doing any of it.
+
+  A dry run is not a nicety here. `INSTALLATION.md` requires that reconciling
+  the two copies is "an explicit push or pull that a person asks for", and a
+  person cannot ask for something they have not been shown. This is what the
+  dialog reads out before the button does anything.
+
+  Returns a list of steps, each `{action, kind, name, reason}`:
+
+      {:create, :frame, "fixture", nil}
+      {:replace, :tool, "welder", nil}
+      {:skip, :mastering, "j3", :belongs_to_the_unit}
+
+  The skips carry a reason rather than being omitted. An operator who cannot
+  see that mastering was *deliberately* not restored will assume it was, which
+  is the belief that ends at the workpiece.
+  """
+  @spec plan(t(), keyword()) :: {:ok, [tuple()]} | {:error, term()}
+  def plan(%__MODULE__{} = installation, opts \\ []) do
+    with {:ok, current} <- pull(opts) do
+      {:ok,
+       Enum.concat([
+         steps(:frame, installation.frames, current.frames),
+         steps(:tool, installation.tools, current.tools),
+         steps(:joint, installation.joints, current.joints, "joint"),
+         robot_step(installation, current),
+         Enum.map(installation.mastering, &{:skip, :mastering, &1["axis"], :belongs_to_the_unit})
+       ])}
+    end
+  end
+
+  defp steps(kind, incoming, existing, key \\ "name") do
+    have = MapSet.new(existing, & &1[key])
+
+    incoming
+    |> Enum.sort_by(& &1[key])
+    |> Enum.map(fn row ->
+      action = if MapSet.member?(have, row[key]), do: :replace, else: :create
+      {action, kind, row[key], nil}
+    end)
+  end
+
+  # The robot description is not restorable and this says so rather than
+  # silently omitting it. `PROGRAMS.md` gap 1: the chain is
+  # `ExMove.Library.demo()`, compile-time, so writing a URDF here would not
+  # change what the arm actually is — it would change what the database claims
+  # the arm is, which is worse than not writing it.
+  defp robot_step(%__MODULE__{} = installation, current) do
+    incoming = Map.get(installation.robot, "name") || ""
+    live = Map.get(current.robot, "name") || ""
+
+    cond do
+      incoming == "" -> []
+      incoming == live -> [{:skip, :robot, incoming, :already_commissioned}]
+      true -> [{:skip, :robot, incoming, :chain_is_compile_time}]
+    end
+  end
+
+  @doc """
+  Install the parts of this backup that may be installed.
+
+  Frames, tools and joint commissioning. Not mastering, and not the robot
+  description — see `plan/2` for why each is skipped and MASTERING.md for what
+  restoring an offset would silently cost.
+
+  Frames go first and parents before children, because a frame that names a
+  parent the controller does not have yet is refused, and the refusal would be
+  a fact about ordering rather than about the backup.
+
+  Returns what it did, in the same shape `plan/2` returns, with failures
+  carrying the controller's own refusal.
+  """
+  @spec install(t(), keyword()) :: {:ok, [tuple()]} | {:error, term()}
+  def install(%__MODULE__{} = installation, opts \\ []) do
+    with {:ok, plan} <- plan(installation, opts) do
+      by_name = fn rows -> Map.new(rows, &{&1["name"], &1}) end
+      frames = by_name.(installation.frames)
+      tools = by_name.(installation.tools)
+      joints = Map.new(installation.joints, &{&1["joint"], &1})
+
+      done =
+        for {action, kind, name, reason} <- order(plan, installation) do
+          case {action, kind} do
+            {:skip, _} ->
+              {:skip, kind, name, reason}
+
+            {_, :frame} ->
+              apply_step(action, kind, name, "cell.teach_frame", frame_args(frames[name]), opts)
+
+            {_, :tool} ->
+              apply_step(action, kind, name, "cell.teach_tool", tool_args(tools[name]), opts)
+
+            {_, :joint} ->
+              apply_step(action, kind, name, "cell.commission", joint_args(joints[name]), opts)
+          end
+        end
+
+      {:ok, done}
+    end
+  end
+
+  # Parents before children. A frame hierarchy is a tree and the controller
+  # resolves a parent by name at write time, so depth order is the only order
+  # that works. Cycles cannot arise — the controller refuses them — but a
+  # backup edited by hand could name a parent that is not in the file, and that
+  # frame sorts last and fails on its own rather than taking the others down.
+  defp order(plan, %__MODULE__{} = installation) do
+    depth = frame_depths(installation.frames)
+
+    Enum.sort_by(plan, fn {_action, kind, name, _reason} ->
+      case kind do
+        :frame -> {0, Map.get(depth, name, 999), name}
+        :tool -> {1, 0, name}
+        :joint -> {2, 0, name}
+        _other -> {3, 0, name}
+      end
+    end)
+  end
+
+  defp frame_depths(frames) do
+    parents = Map.new(frames, &{&1["name"], &1["parent"]})
+
+    Map.new(parents, fn {name, _parent} -> {name, depth_of(name, parents, 0)} end)
+  end
+
+  defp depth_of(_name, _parents, n) when n > 32, do: 999
+
+  defp depth_of(name, parents, n) do
+    case Map.get(parents, name) do
+      p when p in [nil, ""] -> n
+      parent -> if Map.has_key?(parents, parent), do: depth_of(parent, parents, n + 1), else: n
+    end
+  end
+
+  defp apply_step(action, kind, name, node_id, args, opts) do
+    case Link.call(node_id, args, opts) do
+      {:ok, _result} -> {action, kind, name, nil}
+      {:error, reason} -> {:failed, kind, name, reason}
+    end
+  end
+
+  defp frame_args(nil), do: %{}
+
+  defp frame_args(frame) do
+    frame
+    |> pose_args()
+    |> Map.merge(%{"name" => frame["name"], "parent" => frame["parent"] || ""})
+  end
+
+  defp tool_args(nil), do: %{}
+  defp tool_args(tool), do: Map.put(pose_args(tool), "name", tool["name"])
+
+  defp pose_args(row) do
+    Map.new(~w(x y z rx ry rz), fn key -> {key, row[key] || 0.0} end)
+  end
+
+  defp joint_args(nil), do: %{}
+
+  defp joint_args(j) do
+    %{
+      "joint" => j["joint"],
+      "axis" => j["axis"] || "",
+      "max_vel" => j["max_vel"] || 0.0,
+      "max_acc" => j["max_acc"] || 0.0,
+      "soft_lower" => j["soft_lower"] || 0.0,
+      "soft_upper" => j["soft_upper"] || 0.0,
+      "home" => j["home"] || 0.0
+    }
+  end
+
+  @doc """
+  A plan or a result, in words.
+
+      create   frame  fixture
+      replace  tool   welder
+      skip     robot  arctos      (chain is compile-time)
+      skip     mastering j3        (belongs to the unit)
+  """
+  @spec describe([tuple()]) :: String.t()
+  def describe(steps) do
+    Enum.map_join(steps, "\n", fn {action, kind, name, reason} ->
+      note =
+        case reason do
+          nil -> ""
+          atom when is_atom(atom) -> "   (" <> String.replace(to_string(atom), "_", " ") <> ")"
+          other -> "   (" <> inspect(other) <> ")"
+        end
+
+      "#{String.pad_trailing(to_string(action), 8)} #{String.pad_trailing(to_string(kind), 10)} #{String.pad_trailing(to_string(name), 18)}#{note}"
+    end)
+  end
+
   # ── Comparison ────────────────────────────────────────────────────────────
 
   @doc """

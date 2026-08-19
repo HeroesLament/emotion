@@ -1080,6 +1080,7 @@ defmodule EMotion.Schema.Registry do
         mastering(),
         master_axis(),
         installation(),
+        commission(),
         teach_point(),
         forget_point(),
         list_points(),
@@ -1346,6 +1347,41 @@ defmodule EMotion.Schema.Registry do
           type: {:array, {:ref, "type.stored_tool"}},
           description: "Stored tools, by name"
         }
+      ]
+    }
+  end
+
+  defp commission do
+    %Method{
+      id: "cell.commission",
+      name: "Commission",
+      description:
+        "Records what commissioning says about one joint: which drive drives " <>
+          "it, its velocity and acceleration ceilings, its soft limits, and " <>
+          "where home is. Replaces what it said before.\n\n" <>
+          "Refused when the joint is not one the robot has, and when a soft " <>
+          "limit falls outside the mechanical travel the robot description " <>
+          "declares — a soft limit wider than the metal is not a limit.\n\n" <>
+          "This is how an installation is restored, one joint at a time. " <>
+          "Frames and tools already had a way in, because `teach_frame` and " <>
+          "`teach_tool` take six numbers rather than a pose the arm is " <>
+          "standing in; a joint's ceilings had none. Note what is still " <>
+          "absent and `INSTALLATION.md` says why: nothing here re-commissions " <>
+          "the robot description itself, and nothing writes a mastering " <>
+          "offset.",
+      async: false,
+      call_grant: :write_configuration,
+      input_args: [
+        %Argument{name: "joint", type: :string, required: true, description: "The URDF's name for it"},
+        %Argument{name: "axis", type: :string, required: false, description: "Which drive drives it"},
+        %Argument{name: "max_vel", type: :double, required: false, description: "Ceiling, rad/s"},
+        %Argument{name: "max_acc", type: :double, required: false, description: "Ceiling, rad/s²"},
+        %Argument{name: "soft_lower", type: :double, required: false, description: "Soft limit, rad"},
+        %Argument{name: "soft_upper", type: :double, required: false, description: "Soft limit, rad"},
+        %Argument{name: "home", type: :double, required: false, description: "Where home is, rad"}
+      ],
+      output_args: [
+        %ResultField{name: "joint", type: :string, description: "The joint that was commissioned"}
       ]
     }
   end
