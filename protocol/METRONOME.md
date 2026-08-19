@@ -80,6 +80,11 @@ LSS traffic, and it all still has to happen:
 * LSS Fastscan and node-id assignment on a fresh board;
 * firmware download over `0x1F51`.
 
+> **Superseded** by *Correction: three transfer types* below. The three
+> channels are right; putting them on two interrupt endpoints and policing
+> them in software is not. USB schedules periodic before bulk in hardware,
+> which is a stronger guarantee than any rule written here.
+
 So the USB protocol carries **three logical channels over two endpoints**, and
 the framing has to say which is which:
 
@@ -319,6 +324,121 @@ The second row is currently **missing from this design** and should not be:
 losing a reference mid-run is a fault, and faults belong to the metronome.
 
 
+## Correction: three transfer types, not three channels over two endpoints
+
+An earlier section of this document proposed multiplexing cyclic, acyclic and
+control traffic over the two interrupt endpoints, with a software rule that an
+acyclic request must never delay a cyclic window. **That was solving a problem
+USB already solves, in hardware, and solving it worse.**
+
+USB has four transfer types because traffic has different needs, and this
+device's traffic is a textbook three-way split:
+
+| traffic | type | why that one |
+|---|---|---|
+| trajectory windows, feedback | **isochronous** | guaranteed bandwidth and service interval, **no retry** — and a retried trajectory window is stale garbage, so retry is not merely unnecessary, it is wrong |
+| SDO / LSS / NMT tunnel | **bulk** | delivery guaranteed, latency irrelevant, bursty |
+| status, faults, mode | **interrupt** | small, must not be lost, must not wait |
+
+The payoff is larger than tidiness. **A host controller schedules periodic
+transfers first, in the guaranteed portion of every (micro)frame, and lets bulk
+fill what is left.** So a 27 kB firmware download on a bulk endpoint *cannot*
+delay a trajectory window on an isochronous one — not by policy, by the host
+controller's scheduler. The multiplexing rule this document previously invented
+is deleted, and what replaces it is stronger.
+
+### Endpoint map
+
+```
+EP0       control     enumeration; vendor requests for mode, rate, config
+EP1 OUT   isoc        trajectory windows
+EP2 IN    isoc        feedback
+EP3 OUT   bulk        tunnel down  — SDO / LSS / NMT frames, tagged by bus
+EP4 IN    bulk        tunnel up    — responses, EMCY, heartbeat
+EP5 IN    interrupt   status and faults, bInterval 1
+```
+
+Six endpoints. Legal at full speed, legal at high speed, and each class gets
+the error semantics it actually wants: isoc drops rather than stalls, bulk
+retries until it lands, interrupt retries within a bounded window.
+
+### Four spec-correctness details that are usually got wrong
+
+**1. Isochronous bandwidth is reserved at `SET_INTERFACE`, so it belongs on an
+alternate setting.** A device that declares isoc endpoints in altsetting 0 can
+fail enumeration when the bus cannot reserve the bandwidth. The correct pattern
+is altsetting 0 with no isoc at all, altsetting 1 with the streams.
+
+That maps exactly onto the per-bus mode split this document already needs:
+
+* **altsetting 0** — commissioning. Control, bulk and interrupt only. LSS,
+  node-id assignment, firmware download, identity. No cyclic traffic, no
+  reserved bandwidth, and the arm is not moving.
+* **altsetting 1** — operational. Isoc streams live.
+
+Two things that were designed separately turn out to be the same switch.
+
+**2. The isoc OUT endpoint is an asynchronous sink, and the spec has a
+mechanism for it.** The metronome owns the clock; the host's SOF clock is a
+different oscillator. Over minutes they drift, and the look-ahead buffer either
+starves or overruns. USB's first-class answer is an **explicit feedback
+endpoint** — the device tells the host how fast to actually send.
+
+That is precisely the buffer-occupancy problem this document raised as a thing
+to invent. Carrying occupancy in the feedback stream is simpler and works;
+knowing the standard mechanism exists is the difference between choosing not to
+use it and not knowing about it.
+
+**3. `bInterval` means different things at full and high speed.** At FS it is
+frames — milliseconds, 1..255. At HS it is `2^(bInterval-1)` microframes. The
+same descriptor byte is **8× different** across a PHY change, and a device
+carried over unchanged runs eight times faster than intended.
+
+**4. Vendor class is right, but ship the OS descriptors.** There is no USB
+class for motion control, so `0xFF` is correct. Add a **BOS descriptor with
+Microsoft OS 2.0 descriptors** so it binds WinUSB with no driver — the modern
+way to ship a vendor device, and free.
+
+### The performance envelope, and where the ceiling actually is
+
+| | service interval | practical throughput |
+|---|---|---|
+| FS interrupt, MPS 64 | 1 ms | 64 kB/s — **what is built today** |
+| FS isoc, MPS 512 | 1 ms | ~512 kB/s each way (1350 B/frame periodic budget) |
+| FS isoc, MPS 1023 | 1 ms | ~1 MB/s, one direction only — both will not fit |
+| HS isoc, MPS 1024 ×3 | 125 µs | ~24 MB/s |
+| HS bulk, MPS 512 | 125 µs | ~40 MB/s |
+
+Against a requirement of **28 kB/s each way** at 500 Hz.
+
+**Bandwidth is not the constraint and never was.** Even full-speed isochronous
+over-provisions the cyclic stream by 20×. The constraint is **latency
+granularity**: full speed services an endpoint once per millisecond, so a
+feedback → host → command path is ~3 ms worst case. High speed makes it ~375 µs.
+
+So the honest recommendation:
+
+* **Full speed with the endpoint map above is sufficient for V1** and is a
+  descriptor change, not a board change. It is a 10× headroom improvement over
+  today for free, and it deletes the multiplexing rule.
+* **High speed is the upgrade that buys latency, not bandwidth** — worth it if a
+  loop ever needs the host inside it, or for high-rate trace. It costs an
+  external ULPI PHY (USB3300 / TUSB1210) on a PMOD, because the ECP5 has no
+  hard USB PHY; LUNA is the obvious core. A board addition, not a redesign.
+
+### Two practical notes
+
+Isochronous through libusb on macOS requires the async API and is fiddlier than
+interrupt. The shipping host is Linux, where it is routine; the Mac is the
+development box, and that asymmetry is worth knowing before it is discovered.
+
+And the road not taken, stated once so it is on the record: if the goal were
+purely the highest envelope, a raw layer-2 gigabit Ethernet link gives 125 µs
+cycles, 100 m of cable and galvanic isolation, and is what industrial motion
+actually uses. USB is decided, and both FS and HS clear the requirement by an
+order of magnitude, so this is a footnote rather than a recommendation.
+
+
 ## Consequences for the plan
 
 `MVP-PLAN.md` §1 ordered the CAN work as if the host drove the bus. Corrected:
@@ -343,12 +463,14 @@ The `joint_settings` addition is unchanged but gains a field: an axis is
 
 ## Open
 
-1. **Full speed or high speed.** Everything above assumes 64 B/ms. Measure it.
+1. ~~**Full speed or high speed.**~~ Full speed with the corrected endpoint map
+   is sufficient for V1 and is a descriptor change, not a board change. High
+   speed buys latency granularity, not bandwidth, and costs an external ULPI
+   PHY. Decide when a loop needs the host inside it.
 2. **Look-ahead depth**, and whether it is fixed or negotiated at attach.
-3. **Feedback rate and content** — 500 Hz with velocity, or 1 kHz without.
-4. **Bitrate is now a capability question, not a preference.** At 500 kbit/s
-   and 500 Hz there is no acyclic window at all, so 500 Hz requires 1 Mbit/s
-   or the ceiling is 250 Hz. Bench-measure the frame time and settle it.
-5. **Where STO physically lands** on the MKS boards: enable input, or a
+   Related: explicit feedback endpoint, or occupancy carried in the stream.
+3. **Cycle rate.** 500 Hz for motion, dropping to 250 Hz or commissioning mode
+   for bulk acyclic work &mdash; the rate is a mode, not a constant.
+4. **Where STO physically lands** on the MKS boards: enable input, or a
    contactor in the bus supply. Still the most important unanswered hardware
    question in the project.
