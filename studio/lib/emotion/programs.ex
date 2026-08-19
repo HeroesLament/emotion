@@ -61,6 +61,8 @@ defmodule EMotion.Programs do
             run: %{},
             pending_kind: nil,
             file: nil,
+            mode: nil,
+            fault?: false,
             connected?: false,
             message: "Not connected"
 
@@ -150,7 +152,12 @@ defmodule EMotion.Programs do
       open: true,
       save_as: chosen,
       push: connected and state.file != nil,
-      start: chosen and idle?(state),
+      # A button that can be pressed and refused teaches an operator that the
+      # interface is lying to them. `program.start` is refused outside auto, so
+      # until this tab knew the mode it was offering a button the controller
+      # would turn down — which is the rule at the top of this module, broken by
+      # the module that states it.
+      start: chosen and idle?(state) and state.mode == "auto",
       hold: running?(state),
       resume: held?(state),
       step: held?(state),
@@ -496,6 +503,37 @@ defmodule EMotion.Programs do
   defp plural(1), do: ""
   defp plural(_n), do: "s"
 
+  @doc "Where the mode selector is, and whether anything is faulted."
+  @spec mode_loaded(t(), map()) :: t()
+  def mode_loaded(%__MODULE__{} = state, values) do
+    %{
+      state
+      | mode: values["state.controller_mode"],
+        fault?: values["state.fault_present"] == true
+    }
+  end
+
+  @doc """
+  The machine's own state, as a line.
+
+  The mode is here because it is the reason Start is greyed, and a greyed
+  button with no visible cause is its own kind of lie.
+  """
+  @spec machine_line(t()) :: String.t()
+  def machine_line(%__MODULE__{connected?: false}), do: "Not connected"
+
+  def machine_line(%__MODULE__{} = state) do
+    mode =
+      case state.mode do
+        nil -> "mode unknown"
+        "auto" -> "AUTO"
+        other -> "#{String.upcase(other)} — programs will not start"
+      end
+
+    fault = if state.fault?, do: "  ·  FAULT", else: ""
+    "#{mode}#{fault}"
+  end
+
   @doc "A controller arrived."
   @spec connected(t()) :: t()
   def connected(%__MODULE__{} = state) do
@@ -509,7 +547,8 @@ defmodule EMotion.Programs do
     # whole reason a file exists, and closing somebody's document because a
     # socket dropped would be the tool deciding what they are working on.
     %{state | connected?: false, programs: [], statements: [], kinds: [], points: [],
-              selected: nil, statement: nil, run: %{}, message: "Not connected"}
+              selected: nil, statement: nil, run: %{}, mode: nil, fault?: false,
+              message: "Not connected"}
   end
 
   defp describe_run(run) do

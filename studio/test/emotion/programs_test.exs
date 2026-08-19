@@ -35,6 +35,7 @@ defmodule EMotion.ProgramsTest do
     |> Programs.kinds_loaded(kinds())
     |> Programs.points_loaded([%{"name" => "home"}, %{"name" => "away"}])
     |> Programs.loaded([%{"name" => "pick", "statements" => 2}, %{"name" => "place"}])
+    |> Programs.mode_loaded(%{"state.controller_mode" => "auto", "state.fault_present" => false})
   end
 
   defp with_statements(state) do
@@ -182,6 +183,52 @@ defmodule EMotion.ProgramsTest do
       assert e.append
       assert e.delete
       refute e.start, "still refused while something else runs"
+    end
+  end
+
+  describe "the mode selector" do
+    test "start is greyed outside auto" do
+      # The rule at the top of the module, applied to the module: a button that
+      # can be pressed and refused teaches an operator the interface is lying.
+      # program.start is refused outside auto, so offering it there was that.
+      state =
+        with_statements(loaded())
+        |> Programs.mode_loaded(%{"state.controller_mode" => "manual"})
+
+      refute Programs.enabled(state).start
+    end
+
+    test "start is offered in auto" do
+      assert Programs.enabled(with_statements(loaded())).start
+    end
+
+    test "the machine line says why, rather than leaving a greyed button unexplained" do
+      state =
+        with_statements(loaded())
+        |> Programs.mode_loaded(%{"state.controller_mode" => "manual"})
+
+      assert Programs.machine_line(state) =~ "MANUAL"
+      assert Programs.machine_line(state) =~ "will not start"
+    end
+
+    test "a fault is said out loud" do
+      state =
+        loaded()
+        |> Programs.mode_loaded(%{"state.controller_mode" => "auto", "state.fault_present" => true})
+
+      assert Programs.machine_line(state) =~ "FAULT"
+    end
+
+    test "an unknown mode is not silently treated as auto" do
+      state = with_statements(%{loaded() | mode: nil})
+      refute Programs.enabled(state).start
+      assert Programs.machine_line(state) =~ "unknown"
+    end
+
+    test "disconnecting forgets the mode rather than remembering a stale one" do
+      state = Programs.disconnected(loaded())
+      assert state.mode == nil
+      assert Programs.machine_line(state) == "Not connected"
     end
   end
 

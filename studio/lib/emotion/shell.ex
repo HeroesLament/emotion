@@ -438,6 +438,12 @@ defmodule EMotion.Shell do
         {:error, _reason} -> model.programs
       end
 
+    state =
+      case Link.read(["state.controller_mode", "state.fault_present"]) do
+        {:ok, values} -> Programs.mode_loaded(state, values)
+        {:error, _reason} -> state
+      end
+
     if Programs.active?(state), do: Process.send_after(self(), :program_poll, 250)
     %{model | programs: state}
   end
@@ -725,7 +731,14 @@ defmodule EMotion.Shell do
       {:ensure_widget, :prg_open, :button, :tab_programs, label: "Open…"},
       {:ensure_widget, :prg_save, :button, :tab_programs, label: "Save As…"},
       {:ensure_widget, :prg_push, :button, :tab_programs, label: "Push File"},
-      {:ensure_widget, :prg_file, :static_text, :tab_programs, label: ""},
+      # Born with their content, never with "". Cedar's static text takes its
+      # best size from the label it is created with and nothing re-runs the
+      # sizer afterwards, so a widget created empty is nought pixels wide for
+      # the rest of the session — it accepts every setLabel and shows none of
+      # them. Three lines were created empty here and all three were invisible,
+      # which read as buttons that did nothing.
+      {:ensure_widget, :prg_file, :static_text, :tab_programs,
+       label: Programs.file_line(state) || "No file open"},
       {:ensure_widget, :prg_append, :button, :tab_programs, label: "Add…"},
       {:ensure_widget, :prg_remove, :button, :tab_programs, label: "Remove"},
       {:ensure_widget, :prg_up, :button, :tab_programs, label: "Up"},
@@ -735,9 +748,14 @@ defmodule EMotion.Shell do
       {:ensure_widget, :prg_resume, :button, :tab_programs, label: "Resume"},
       {:ensure_widget, :prg_step, :button, :tab_programs, label: "Step"},
       {:ensure_widget, :prg_stop, :button, :tab_programs, label: "Stop"},
-      {:ensure_widget, :prg_run, :static_text, :tab_programs, label: ""},
+      {:ensure_widget, :prg_machine, :static_text, :tab_programs,
+       label: Programs.machine_line(state)},
+      {:set, :prg_machine, label: Programs.machine_line(state)},
+      {:ensure_widget, :prg_run, :static_text, :tab_programs,
+       label: Programs.run_line(state)},
       {:set, :prg_run, label: Programs.run_line(state)},
-      {:ensure_widget, :prg_status, :static_text, :tab_programs, label: ""},
+      {:ensure_widget, :prg_status, :static_text, :tab_programs,
+       label: Programs.message(state)},
       {:set, :prg_status, label: Programs.message(state)},
 
       {:set, :prg_new, enabled: enabled.new},
@@ -793,11 +811,13 @@ defmodule EMotion.Shell do
               ]}
            ]},
           {:spacer, 6},
-          :prg_file,
+          {:prg_machine, proportion: 0, flag: :expand},
           {:spacer, 2},
-          :prg_run,
+          {:prg_file, proportion: 0, flag: :expand},
           {:spacer, 2},
-          :prg_status
+          {:prg_run, proportion: 0, flag: :expand},
+          {:spacer, 2},
+          {:prg_status, proportion: 0, flag: :expand}
         ]}}
     ]
   end
