@@ -12,7 +12,124 @@ that mandatory rather than preferable: N buses off one clock is a wiring fact,
 N buses off N host threads is unbounded skew.
 
 
+## Transports: three topologies, one interface
+
+The host link is **USB, AXI-DMA (Zynq) or possibly Ethernet**. It is never SPI —
+`docs/INTRODUCTION.md` says SPI and is wrong; that line predates the metronome
+app by two months and should be corrected rather than reconciled.
+
+These are not three cables for one design. They are three **deployment
+topologies**, and they differ in what a "window" has to be:
+
+| | where the FPGA is | a window is | service interval |
+|---|---|---|---|
+| **USB** | separate board, cable, hot-plug | a packet, quantised to frames | 1 ms (FS) / 125 µs (HS) |
+| **AXI-DMA** | same die as the host (Zynq PS+PL) | **a ring entry in DDR** | none — it is memory |
+| **Ethernet** | separate board, long cable, isolated | a frame | 125 µs achievable |
+
+### Make the ring the interface, and the choice binds late
+
+Everything this document already specifies — trajectory windows, published
+look-ahead depth, `seq` so a gap reads as a gap, saturating underflow counts,
+occupancy as published state — describes **a ring buffer with a producer index,
+a consumer index and health counters**. Nothing in it is about USB.
+
+So define the metronome interface as exactly that, and the three transports
+become three ways of moving the same structure:
+
+* **AXI-DMA** — the ring *is* the interface. Nothing is moved.
+* **USB** — ring entries are packetised into isochronous transfers; the
+  endpoint architecture in this document is the packetisation layer, nothing
+  more.
+* **Ethernet** — ring entries in frames, with a sequence number that already
+  exists.
+
+That is worth doing deliberately, because it means the transport decision stops
+gating everything upstream of it.
+
+### AXI-DMA is the best of the three, and most of it exists
+
+On Zynq the PS (ARM, Linux, BEAM) and the PL are one die. There is no link,
+there is shared DDR. And EHDL already has the parts:
+
+* **`Hw.PS7HP`** — PS7 with `S_AXI_HP0` and the EMIO GPIO banks.
+* **`Hw.AXIHPWriter`** — the PL mastering data into DDR through HP0.
+
+More valuable than the components is the architectural rule they were built
+around, which was paid for in a debugging session and is exactly right here:
+
+> The PL *masters* data into DDR through `S_AXI_HP0`. The lethal GP failure
+> mode — a PS-initiated read into the PL that never answers, hanging the CPU
+> with no recovery — cannot occur when the PL is the master; a broken PL master
+> starves, it cannot wedge the ARM.
+
+A metronome that starves is a metronome that reports underflow and quick-stops.
+A metronome that wedges the ARM is unrecoverable without a power cycle. That
+distinction is the whole ballgame for a motion controller, and it is already
+decided correctly.
+
+The design that falls out:
+
+```
+  DDR (PS)                                    PL
+  ┌─────────────────────┐
+  │ trajectory ring     │ ◀── HP0 reads ───── segment fetch, look-ahead
+  │ feedback ring       │ ◀── HP0 writes ──── AXIHPWriter (exists)
+  └─────────────────────┘
+        indices, occupancy, underflow, LOCKED, heartbeat
+             ◀────── EMIO GPIO banks 2/3, 64 wires ──────▶
+```
+
+Which is, near enough word for word, what `Hw.PS7HP`'s own moduledoc already
+describes EMIO carrying: *"write pointer bits, burst/overrun counters, LOCKED,
+heartbeats."* Control plane on GPIO, data plane on HP, PL always the master.
+
+**What this deletes:** packets, framing, service intervals, `bInterval`,
+endpoint maps, isochronous alternate settings, explicit feedback endpoints, and
+the entire contents of `USB-PATH.md`. Latency becomes DDR latency.
+
+**What it needs that does not exist yet:** the HP0 **read** path. `AXIHPWriter`
+is write-side only, and the trajectory ring requires the PL to master reads. The
+same safety property holds — a PL master that cannot read starves — so it is the
+same architecture, not a new one.
+
+### The CAN side is further along than assumed
+
+`designs/can_controller_bringup/` brings up **`Hw.CAN.Controller` — a soft CAN
+controller in fabric** driving a bare SN65HVD230, no MCP2515 anywhere, and
+transmits a real CANopen SYNC frame (COB-ID 0x080) on a real bus.
+`designs/canopen_sync_bringup/` does the same through the MCP2515 path at
+500 kbps.
+
+For a multi-bus metronome the soft controller is the right one, and not
+marginally: **N controller instances and N transceivers, all in the same clock
+domain as the SYNC generator.** That is "one clock, N buses" as a structural
+fact rather than a synchronisation effort. The MCP2515 path puts an SPI
+transaction between the SYNC generator and the wire — fine for bring-up, wrong
+for the thing whose entire purpose is deterministic timing.
+
+Three actuator buses plus an effector segment is four instances of a core that
+already transmits on silicon.
+
+### So which topology
+
+Pick by where the FPGA physically is, not by preference:
+
+* **Zynq carrier, PS running the controller** → AXI-DMA. Best latency, no
+  protocol, most of it built, and the failure mode is already the safe one.
+* **Discrete FPGA on a cable** → USB, and `USB-PATH.md` applies. This is the
+  ULX3S bench topology and it is not wasted work: it is how the CAN cores and
+  the cyclic engine get developed before a carrier exists.
+* **Distance or galvanic isolation required** → Ethernet, which needs a MAC and
+  PHY in fabric and only earns that if the distance is real.
+
+The ring interface makes this a late decision. Make it late.
+
+
 ## The constraint moved. It is not CAN any more.
+
+> Applies to the **USB topology**. On Zynq with AXI-DMA there is no link
+> budget at all — see *Transports* above.
 
 Measured from `Metronome.USB`: vendor class, **two interrupt endpoints, MPS 64,
 bInterval 1**. That reads as full speed — interrupt MPS 64 is the FS ceiling —

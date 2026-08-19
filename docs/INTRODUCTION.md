@@ -2,7 +2,7 @@
 
 ExMo is an open industrial motion controller framework built entirely in Elixir/OTP. It is designed to run anything from a single-axis leadscrew on a mini lathe to a 9-DOF arm with multiple manipulator channels — a developer-friendly alternative to ROS2 that brings OTP's supervision, fault tolerance, and concurrency model to real-time motion control.
 
-The reference hardware uses a Raspberry Pi CM5 communicating over SPI to a ULX3S ECP5 FPGA, which bridges to CAN FD via an MCP2518FD controller. The architecture is transport-agnostic: drives, sensors, and actuators attach through swappable transport adapters.
+The reference hardware pairs an Elixir/OTP host with an FPGA motion metronome that owns the hard-real-time cyclic engine. The host link is **USB, AXI-DMA on Zynq, or Ethernet** — chosen by where the FPGA physically sits, and late-bound behind a ring-buffer interface (see `protocol/METRONOME.md`). The FPGA drives the drive buses directly through soft CAN controllers. The architecture is transport-agnostic: drives, sensors, and actuators attach through swappable transport adapters.
 
 ---
 
@@ -45,13 +45,18 @@ That declaration is a valid OTP supervisor, a full Information Model contributor
 
 ```
 Host (Elixir/OTP)
-  └── SPI
-       └── ULX3S ECP5 FPGA
-             └── SPI
-                  └── MCP2518FD CAN FD controller
-                        └── CAN FD bus
-                               └── Drives / actuators (n axes)
+  └── USB / AXI-DMA (Zynq) / Ethernet
+       └── FPGA metronome  — one clock, SYNC + cyclic engine + look-ahead
+             └── soft CAN controllers, one per bus
+                  └── CAN 500 kbit/s, three actuator buses of two drives
+                         + an effector segment
+                               └── Drives / actuators
 ```
+
+Earlier revisions of this document described an SPI host link and a CAN FD
+bridge via MCP2518FD. Both are superseded: the link is never SPI, and CAN FD
+buys nothing while the drives are classical-CAN only. See `protocol/FIELDBUS.md`
+and `protocol/METRONOME.md`.
 
 The transport layer is abstracted behind `ExDrive.Transport` — a CAN FD adapter, an EtherCAT adapter, or a mock simulator all satisfy the same interface.
 
