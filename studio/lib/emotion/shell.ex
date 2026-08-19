@@ -285,7 +285,9 @@ defmodule EMotion.Shell do
   # never do. If a controller over a slow link ever makes that false, the fix
   # is a pending flag in the state, not a background task with no flag.
   defp program_action(model, action) do
-    {state, effects} = Programs.action(model.programs, action)
+    # A message is true until the operator does something else. Clearing here
+    # rather than in each clause means no action can forget to.
+    {state, effects} = Programs.action(Programs.clear_message(model.programs), action)
     run_program_effects(%{model | programs: state}, effects)
   end
 
@@ -354,10 +356,7 @@ defmodule EMotion.Shell do
   defp run_program_effect({:file, {:push, bundle}}, model) do
     case Bundle.push(bundle, []) do
       {:ok, done} ->
-        %{model | programs: Programs.ran(model.programs, %{})}
-        |> then(fn m ->
-          %{m | programs: %{m.programs | status: summarise(done)}}
-        end)
+        %{model | programs: %{model.programs | message: summarise(done)}}
 
       {:error, {:cell_not_commissioned, refusals}} ->
         missing = Enum.map_join(refusals, ", ", fn {_, kind, name, _} -> "#{kind} #{name}" end)
@@ -369,8 +368,10 @@ defmodule EMotion.Shell do
   end
 
   defp summarise(done) do
-    failed = Enum.count(done, &match?({:failed, _, _, _}, &1))
-    if failed == 0, do: "Pushed: #{length(done)} items", else: "Pushed with #{failed} failure(s)"
+    case Enum.count(done, &match?({:failed, _, _, _}, &1)) do
+      0 -> "Pushed #{length(done)} items"
+      n -> "Pushed with #{n} failure#{if n == 1, do: "", else: "s"}"
+    end
   end
 
   defp describe_file({:hash_mismatch, _stored, _actual}),
@@ -723,7 +724,7 @@ defmodule EMotion.Shell do
       {:ensure_widget, :prg_refresh, :button, :tab_programs, label: "Refresh"},
       {:ensure_widget, :prg_open, :button, :tab_programs, label: "Open…"},
       {:ensure_widget, :prg_save, :button, :tab_programs, label: "Save As…"},
-      {:ensure_widget, :prg_push, :button, :tab_programs, label: "Push"},
+      {:ensure_widget, :prg_push, :button, :tab_programs, label: "Push File"},
       {:ensure_widget, :prg_file, :static_text, :tab_programs, label: ""},
       {:ensure_widget, :prg_append, :button, :tab_programs, label: "Add…"},
       {:ensure_widget, :prg_remove, :button, :tab_programs, label: "Remove"},
@@ -734,8 +735,10 @@ defmodule EMotion.Shell do
       {:ensure_widget, :prg_resume, :button, :tab_programs, label: "Resume"},
       {:ensure_widget, :prg_step, :button, :tab_programs, label: "Step"},
       {:ensure_widget, :prg_stop, :button, :tab_programs, label: "Stop"},
-      {:ensure_widget, :prg_status, :static_text, :tab_programs, label: state.status},
-      {:set, :prg_status, label: state.status},
+      {:ensure_widget, :prg_run, :static_text, :tab_programs, label: ""},
+      {:set, :prg_run, label: Programs.run_line(state)},
+      {:ensure_widget, :prg_status, :static_text, :tab_programs, label: ""},
+      {:set, :prg_status, label: Programs.message(state)},
 
       {:set, :prg_new, enabled: enabled.new},
       {:set, :prg_delete, enabled: enabled.delete},
@@ -791,6 +794,8 @@ defmodule EMotion.Shell do
            ]},
           {:spacer, 6},
           :prg_file,
+          {:spacer, 2},
+          :prg_run,
           {:spacer, 2},
           :prg_status
         ]}}

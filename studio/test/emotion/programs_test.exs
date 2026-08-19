@@ -73,7 +73,7 @@ defmodule EMotion.ProgramsTest do
       assert state.statements == []
       assert state.kinds == []
       assert state.selected == nil
-      assert state.status == "Not connected"
+      assert Programs.message(state) == "Not connected"
     end
   end
 
@@ -303,17 +303,17 @@ defmodule EMotion.ProgramsTest do
           "data" => %{"mode" => "manual"}
         })
 
-      assert state.status =~ "mode selector"
-      assert state.status =~ "manual"
+      assert Programs.message(state) =~ "mode selector"
+      assert Programs.message(state) =~ "manual"
     end
 
     test "a run describes itself with position" do
       state = Programs.ran(loaded(), %{name: "pick", state: "running", statement: 1, statements: 3})
-      assert state.status == "pick: running at 1/3"
+      assert Programs.run_line(state) == "pick: running at 1/3"
     end
 
     test "with no program loaded it says so rather than showing nils" do
-      assert Programs.ran(loaded(), %{name: "", state: "", statement: 0}).status ==
+      assert Programs.run_line(Programs.ran(loaded(), %{name: "", state: "", statement: 0})) ==
                "No program loaded"
     end
   end
@@ -391,6 +391,41 @@ defmodule EMotion.ProgramsTest do
       assert state.file.bundle == bundle
       assert Programs.enabled(state).open
       refute Programs.enabled(state).push
+    end
+  end
+
+  describe "the run line and the message are different things" do
+    test "polling does not destroy the last message" do
+      # The bug this split exists for. `ran/2` used to write the same field
+      # `failed/2` writes, and polling runs after almost every action — so a
+      # refusal survived for milliseconds and was replaced by the run line,
+      # which with nothing running reads "No program loaded". Every message in
+      # this tab looked like that sentence, including the answer to a button
+      # somebody had just pressed.
+      state =
+        loaded()
+        |> Programs.failed(%{"message" => "The controller refused that"})
+        |> Programs.ran(%{name: "", state: "", statement: 0, statements: 0})
+
+      assert Programs.message(state) =~ "refused"
+      assert Programs.run_line(state) == "No program loaded"
+    end
+
+    test "a message survives a refresh's worth of run updates" do
+      state = Programs.failed(loaded(), %{"message" => "cell has no frame fixture_a"})
+
+      state =
+        Enum.reduce(1..5, state, fn _, acc ->
+          Programs.ran(acc, %{name: "", state: "", statement: 0, statements: 0})
+        end)
+
+      assert Programs.message(state) =~ "fixture_a"
+    end
+
+    test "asking for something new clears the last message" do
+      # A message is true until the operator does something else.
+      state = Programs.failed(loaded(), %{"message" => "old news"})
+      assert Programs.message(Programs.clear_message(state)) == ""
     end
   end
 

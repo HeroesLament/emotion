@@ -62,7 +62,7 @@ defmodule EMotion.Programs do
             pending_kind: nil,
             file: nil,
             connected?: false,
-            status: "Not connected"
+            message: "Not connected"
 
   @type t :: %__MODULE__{}
 
@@ -309,7 +309,7 @@ defmodule EMotion.Programs do
 
   def dialog(state, :program_new, {:ok, %{"name" => name}}) do
     case String.trim(to_string(name)) do
-      "" -> {%{state | status: "A program needs a name"}, []}
+      "" -> {%{state | message: "A program needs a name"}, []}
       name -> {%{state | selected: name}, [{:program, {:create, name}}, :refresh]}
     end
   end
@@ -438,13 +438,35 @@ defmodule EMotion.Programs do
 
   @doc "The run's own account of itself."
   @spec ran(t(), map()) :: t()
-  def ran(%__MODULE__{} = state, run) do
-    %{state | run: run, status: describe_run(run)}
-  end
+  def ran(%__MODULE__{} = state, run), do: %{state | run: run}
+
+  @doc """
+  The run's own account of itself, as a line.
+
+  Derived rather than stored, and that is the fix for a bug worth recording: it
+  used to be written into the same field as messages. Polling runs after almost
+  every action, so a refusal or a push result survived for milliseconds before
+  `describe_run/1` overwrote it — and with nothing running, what it overwrote it
+  with was "No program loaded". Every message in this tab looked like that
+  sentence, including the answer to a button somebody had just pressed.
+
+  Two lifetimes, two fields. A run line is true until the run changes; a message
+  is true until the operator does something else.
+  """
+  @spec run_line(t()) :: String.t()
+  def run_line(%__MODULE__{run: run}), do: describe_run(run)
+
+  @doc "The last thing that happened, in words. Cleared when the operator acts."
+  @spec message(t()) :: String.t()
+  def message(%__MODULE__{message: message}), do: message
+
+  @doc "Forget the last message, because something new is being asked for."
+  @spec clear_message(t()) :: t()
+  def clear_message(%__MODULE__{} = state), do: %{state | message: ""}
 
   @doc "Something was refused. The controller's own words, not ours."
   @spec failed(t(), term()) :: t()
-  def failed(%__MODULE__{} = state, reason), do: %{state | status: describe(reason)}
+  def failed(%__MODULE__{} = state, reason), do: %{state | message: describe(reason)}
 
   @doc """
   A file was opened. Held beside the controller's library, never merged into it.
@@ -454,7 +476,7 @@ defmodule EMotion.Programs do
     %{
       state
       | file: %{path: path, bundle: bundle, hash: hash},
-        status: "#{Path.basename(path)}  #{String.slice(hash, 0, 12)}"
+        message: "Opened #{Path.basename(path)}"
     }
   end
 
@@ -477,7 +499,7 @@ defmodule EMotion.Programs do
   @doc "A controller arrived."
   @spec connected(t()) :: t()
   def connected(%__MODULE__{} = state) do
-    %{state | connected?: true, status: "Connected"}
+    %{state | connected?: true, message: "Connected"}
   end
 
   @doc "It went away. What was on screen is now stale, and saying so is the job."
@@ -487,7 +509,7 @@ defmodule EMotion.Programs do
     # whole reason a file exists, and closing somebody's document because a
     # socket dropped would be the tool deciding what they are working on.
     %{state | connected?: false, programs: [], statements: [], kinds: [], points: [],
-              selected: nil, statement: nil, run: %{}, status: "Not connected"}
+              selected: nil, statement: nil, run: %{}, message: "Not connected"}
   end
 
   defp describe_run(run) do
