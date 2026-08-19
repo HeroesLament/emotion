@@ -20,7 +20,7 @@ defmodule ExProto.Source.Cell do
 
   @behaviour ExProto.Source
 
-  alias ExMo.Cell
+  alias EMotion.Cell
   alias ExMove.CartesianStream
   alias ExStore.Cell.Point
   alias ExStore.{Frames, Points, Tools}
@@ -319,7 +319,7 @@ defmodule ExProto.Source.Cell do
   defp created({:error, _changeset}, _name, _created?), do: {:error, :rejected}
 
   defp arm_still do
-    name = ExMo.Schema.Registry.arm_chain().name
+    name = EMotion.Schema.Registry.arm_chain().name
 
     case CartesianStream.status(name) do
       nil -> :ok

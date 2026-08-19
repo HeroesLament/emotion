@@ -23,7 +23,7 @@ defmodule ExProto.Session do
   on why a simulator that owns its own clock cannot be stepped.
   """
 
-  alias ExMo.Projection.JSONRPC.OpenRPC
+  alias EMotion.Projection.JSONRPC.OpenRPC
 
   @max_subscriptions 32
 

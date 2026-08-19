@@ -27,8 +27,8 @@ defmodule Mix.Tasks.Exmo.Openrpc do
 
   use Mix.Task
 
-  alias ExMo.InformationModel
-  alias ExMo.Projection.JSONRPC.OpenRPC
+  alias EMotion.InformationModel
+  alias EMotion.Projection.JSONRPC.OpenRPC
 
   @default_path "protocol/emotion-protocol.openrpc.json"
 

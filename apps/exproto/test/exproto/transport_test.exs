@@ -11,9 +11,9 @@ defmodule ExProto.TransportTest do
 
   use ExUnit.Case, async: false
 
-  alias ExMo.InformationModel
-  alias ExMo.Projection.JSONRPC
-  alias ExMo.Projection.JSONRPC.OpenRPC
+  alias EMotion.InformationModel
+  alias EMotion.Projection.JSONRPC
+  alias EMotion.Projection.JSONRPC.OpenRPC
   alias ExProto.{Endpoint, TLS}
   alias ExProto.Source.Static
 

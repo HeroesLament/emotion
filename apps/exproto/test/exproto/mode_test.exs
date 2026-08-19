@@ -84,7 +84,7 @@ defmodule ExProto.ModeTest do
       # VM had ever moved the arm. The moment one did, by starting the arm's
       # real drives so that a move could succeed, this failed while nothing it
       # tests had changed.
-      CartesianStream.release(ExMo.Schema.Registry.arm_chain().name)
+      CartesianStream.release(EMotion.Schema.Registry.arm_chain().name)
 
       :ok = Mode.select(:idle, TestMode)
 
@@ -94,7 +94,7 @@ defmodule ExProto.ModeTest do
       # The refusal has to come before the stream, not after. A stream started
       # and then told it may not move is a process holding an arm it is not
       # allowed to hold.
-      assert CartesianStream.whereis(ExMo.Schema.Registry.arm_chain().name) == nil
+      assert CartesianStream.whereis(EMotion.Schema.Registry.arm_chain().name) == nil
     end
 
     test "nothing moves on a refused jog", %{arg: arg} do

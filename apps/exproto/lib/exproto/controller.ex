@@ -26,8 +26,8 @@ defmodule ExProto.Controller do
 
   require Logger
 
-  alias ExMo.InformationModel
-  alias ExMo.Projection.JSONRPC
+  alias EMotion.InformationModel
+  alias EMotion.Projection.JSONRPC
   alias ExProto.{Endpoint, Source}
 
   @doc """
@@ -127,7 +127,7 @@ defmodule ExProto.Controller do
   # was taught. A log line is the minimum; an operator confirmation before the
   # first program runs is the eventual answer.
   defp audit_mastering do
-    case ExMo.Cell.audit_mastering() do
+    case EMotion.Cell.audit_mastering() do
       {:ok, []} ->
         :ok
 

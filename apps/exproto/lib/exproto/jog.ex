@@ -83,7 +83,7 @@ defmodule ExProto.Jog do
 
   require Logger
 
-  alias ExMo.Schema.Method
+  alias EMotion.Schema.Method
   alias ExProto.Source
 
   # The bounds come from the model rather than from here. They are published in

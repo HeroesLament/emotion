@@ -5,7 +5,7 @@ defmodule ExProto.Nodes do
   Every method here returns `{result, session}` where result is `{:ok, value}`
   or `{:error, code, message}` using the codes in the generated OpenRPC
   document. The codes are not invented here — they are the ones
-  `ExMo.Projection.JSONRPC.OpenRPC` publishes, and the test suite checks they
+  `EMotion.Projection.JSONRPC.OpenRPC` publishes, and the test suite checks they
   have not drifted apart.
 
   ## Batches fail per entry, not per call
@@ -21,7 +21,7 @@ defmodule ExProto.Nodes do
   is not something this layer can honestly offer.
   """
 
-  alias ExMo.Schema.Method
+  alias EMotion.Schema.Method
   alias ExProto.{Jog, Session, Source, Validate}
 
   # Mirrors components/errors in the generated document.

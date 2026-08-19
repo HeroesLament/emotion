@@ -1,6 +1,6 @@
 defmodule ExHMI.Transport.OpcUA do
   @moduledoc """
-  OPC UA server transport for ExMo.
+  OPC UA server transport for EMotion.
 
   Implements `ExOpcUA.Server.NodeManager` to expose the arm's state to any
   OPC UA client — including RoboDK's OPC UA add-in.

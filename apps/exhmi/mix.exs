@@ -33,7 +33,7 @@ defmodule Exhmi.MixProject do
       # Stored geometry: frames and the fitted tool. This app is where a row
       # and a matrix are allowed to meet — exstore holds rows and knows nothing
       # about kinematics, exmove composes transforms and knows nothing about a
-      # database, and ExMo.Cell is the seam.
+      # database, and EMotion.Cell is the seam.
       {:exstore, in_umbrella: true},
 
       # For the grant vocabulary. The model declares which grant guards each

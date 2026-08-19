@@ -9,8 +9,8 @@ defmodule ExLinkTest do
 
   use ExUnit.Case, async: false
 
-  alias ExMo.InformationModel
-  alias ExMo.Projection.JSONRPC
+  alias EMotion.InformationModel
+  alias EMotion.Projection.JSONRPC
   alias ExProto.Endpoint
   alias ExLink, as: Client
   alias ExProto.Source.Static
@@ -64,7 +64,7 @@ defmodule ExLinkTest do
       # application that generates it, so it declares the revision instead.
       # This is the assertion that makes the declaration safe: bump one and the
       # build fails here, rather than a workshop discovering it at handshake.
-      assert ExLink.protocol_version() == ExMo.Projection.JSONRPC.OpenRPC.protocol_version()
+      assert ExLink.protocol_version() == EMotion.Projection.JSONRPC.OpenRPC.protocol_version()
     end
   end
 

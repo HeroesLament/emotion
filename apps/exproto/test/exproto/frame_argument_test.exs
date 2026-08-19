@@ -9,7 +9,7 @@ defmodule ExProto.FrameArgumentTest do
   What the `frame` argument now accepts, and what it still refuses.
 
   The arithmetic — composing a pose with the frame it was given in — is tested
-  in `ExMo.CellTest` and `ExMove.FrameAlgebraTest`, where it can be asserted
+  in `EMotion.CellTest` and `ExMove.FrameAlgebraTest`, where it can be asserted
   against hand-computed answers. What is tested here is the plumbing: that a
   stored name reaches the resolver, that an unknown one is refused rather than
   quietly treated as base, and that `tool` is accepted for a velocity and
@@ -27,7 +27,7 @@ defmodule ExProto.FrameArgumentTest do
     # than a per-test one. Started once and left running: Exdrive's supervisor
     # has no stop, and a drive standing still with nothing commanded is what
     # every other test in this app already assumes when it finds one.
-    chain = ExMo.Schema.Registry.arm_chain()
+    chain = EMotion.Schema.Registry.arm_chain()
 
     for axis_id <- chain.axis_ids do
       case Exdrive.start_axis(axis_id) do
@@ -59,7 +59,7 @@ defmodule ExProto.FrameArgumentTest do
     {:ok, frame} = Frames.create(%{name: name, x: 0.4, y: -0.1, rz: :math.pi() / 2})
 
     on_exit(fn ->
-      CartesianStream.release(ExMo.Schema.Registry.arm_chain().name)
+      CartesianStream.release(EMotion.Schema.Registry.arm_chain().name)
       Frames.delete(frame)
     end)
 

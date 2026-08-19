@@ -1,7 +1,7 @@
 defmodule ExProto.Program.RunTest do
   use ExUnit.Case, async: false
 
-  alias ExMo.Program.Editor
+  alias EMotion.Program.Editor
   alias ExMove.{CartesianStream, JointState}
   alias ExProto.Mode
   alias ExProto.Program.Run
@@ -18,7 +18,7 @@ defmodule ExProto.Program.RunTest do
   @bent [0.0, 0.6, -1.2, 0.0, 0.7, 0.0]
 
   setup_all do
-    chain = ExMo.Cell.Loaded.chain()
+    chain = EMotion.Cell.Loaded.chain()
 
     for axis_id <- chain.axis_ids do
       case Exdrive.start_axis(axis_id) do
@@ -33,7 +33,7 @@ defmodule ExProto.Program.RunTest do
   end
 
   setup do
-    chain = ExMo.Cell.Loaded.chain()
+    chain = EMotion.Cell.Loaded.chain()
     CartesianStream.release(chain.name)
 
     for {axis_id, position} <- Enum.zip(chain.axis_ids, @bent) do
@@ -104,9 +104,9 @@ defmodule ExProto.Program.RunTest do
 
   # A point at the arm's current pose, nudged in Z so a move to it is short.
   defp teach(name, dz) do
-    chain = ExMo.Cell.Loaded.chain()
+    chain = EMotion.Cell.Loaded.chain()
     {:ok, js} = JointState.read(chain)
-    pose = ExMove.FK.solve(ExMo.Cell.chain(), js)
+    pose = ExMove.FK.solve(EMotion.Cell.chain(), js)
 
     {:ok, robot} = {:ok, ExStore.Robots.active()}
 
@@ -169,7 +169,7 @@ defmodule ExProto.Program.RunTest do
       true ->
         flunk(
           "never became true; run is #{inspect(Run.status(RunTestRun))}, " <>
-            "stream is #{inspect(ExMove.CartesianStream.status(ExMo.Cell.Loaded.chain().name))}"
+            "stream is #{inspect(ExMove.CartesianStream.status(EMotion.Cell.Loaded.chain().name))}"
         )
     end
   end
@@ -207,7 +207,7 @@ defmodule ExProto.Program.RunTest do
 
       # Mid-wait the arm has arrived and is not being commanded anywhere.
       assert Run.status(RunTestRun).state == :running
-      assert CartesianStream.queued(ExMo.Cell.Loaded.chain().name) in [0, nil]
+      assert CartesianStream.queued(EMotion.Cell.Loaded.chain().name) in [0, nil]
 
       wait_until(fn -> Run.status(RunTestRun).state == :done end)
     end
@@ -371,7 +371,7 @@ defmodule ExProto.Program.RunTest do
       assert Run.status(RunTestRun).state == :held
 
       # Held means stopped: no stream is holding the arm.
-      assert CartesianStream.whereis(ExMo.Cell.Loaded.chain().name) == nil
+      assert CartesianStream.whereis(EMotion.Cell.Loaded.chain().name) == nil
 
       :ok = Run.resume(RunTestRun)
 

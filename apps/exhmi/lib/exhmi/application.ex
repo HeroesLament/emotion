@@ -10,7 +10,7 @@ defmodule ExHMI.Application do
       # First, and blocking: the Information Model's axis nodes are derived
       # from the loaded chain, so nothing that projects the model may start
       # before the controller knows which robot it is.
-      ExMo.Cell.Boot,
+      EMotion.Cell.Boot,
       ExHMI.AddressSpace,
       {ExOpcUA.Server, [
         port: port,

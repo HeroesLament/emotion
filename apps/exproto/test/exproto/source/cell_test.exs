@@ -21,7 +21,7 @@ defmodule ExProto.Source.CellTest do
     # this file's precondition and it is established rather than assumed. The
     # same lesson as ModeTest: a test that depends on machine state and does
     # not set it passes for as long as nothing else in the VM has moved the arm.
-    ExMove.CartesianStream.release(ExMo.Schema.Registry.arm_chain().name)
+    ExMove.CartesianStream.release(EMotion.Schema.Registry.arm_chain().name)
 
     on_exit(fn ->
       # Children first: the database refuses to orphan one, which is the point.
@@ -148,7 +148,7 @@ defmodule ExProto.Source.CellTest do
       assert Source.read("cell.tool", []) == {:ok, "gripper_t#{tag}"}
 
       # And the arm's own geometry moved with it, without the arm moving.
-      assert ExMo.Cell.chain().tool.z == 0.15
+      assert EMotion.Cell.chain().tool.z == 0.15
     end
 
     test "fitting a second one unfits the first", %{tag: tag} do

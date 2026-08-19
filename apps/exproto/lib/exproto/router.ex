@@ -13,7 +13,7 @@ defmodule ExProto.Router do
   # route through conn.assigns.opts instead of a bare variable.
   use Plug.Router, copy_opts_to_assign: :opts
 
-  alias ExMo.Projection.JSONRPC.OpenRPC
+  alias EMotion.Projection.JSONRPC.OpenRPC
   alias ExProto.{AuthPlug, Socket}
 
   @max_login_body 4_096
@@ -189,7 +189,7 @@ defmodule ExProto.Router do
   end
 
   defp document do
-    with {:ok, model} <- ExMo.InformationModel.compiled_model(),
+    with {:ok, model} <- EMotion.InformationModel.compiled_model(),
          {:ok, doc} <- OpenRPC.document(model) do
       {:ok, OpenRPC.encode(doc)}
     end

@@ -10,9 +10,9 @@ defmodule ExProto.DispatchTest do
 
   use ExUnit.Case, async: true
 
-  alias ExMo.InformationModel
-  alias ExMo.Projection.JSONRPC
-  alias ExMo.Projection.JSONRPC.OpenRPC
+  alias EMotion.InformationModel
+  alias EMotion.Projection.JSONRPC
+  alias EMotion.Projection.JSONRPC.OpenRPC
   alias ExProto.{Dispatch, Nodes, Session}
   alias ExProto.Source.Static
 
@@ -800,7 +800,7 @@ defmodule ExProto.DispatchTest do
       {:reply, response, _} = jog(session, 0.1)
 
       assert response["result"]["accepted"] == true
-      assert response["result"]["deadlineMs"] == ExMo.Schema.Method.watchdog_deadline_ms().default
+      assert response["result"]["deadlineMs"] == EMotion.Schema.Method.watchdog_deadline_ms().default
     end
 
     test "an observer may not", context do
@@ -814,7 +814,7 @@ defmodule ExProto.DispatchTest do
 
     test "the deadline is clamped, and the granted one is what comes back", context do
       session = held_session(:operator, context)
-      bounds = ExMo.Schema.Method.watchdog_deadline_ms()
+      bounds = EMotion.Schema.Method.watchdog_deadline_ms()
 
       {:reply, slow, _} = jog(session, 0.1, %{"deadlineMs" => 10_000})
       assert slow["result"]["deadlineMs"] == bounds.max
@@ -957,7 +957,7 @@ defmodule ExProto.DispatchTest do
         )
 
       assert accepted["result"]["accepted"] == true
-      assert accepted["result"]["deadlineMs"] == ExMo.Schema.Method.watchdog_deadline_ms().default
+      assert accepted["result"]["deadlineMs"] == EMotion.Schema.Method.watchdog_deadline_ms().default
       assert ExProto.Jog.holder("axes", context.jog) == {:ok, self()}
 
       joint = held_session(:operator, context)

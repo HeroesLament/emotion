@@ -1,4 +1,4 @@
-# This app stores nothing, but ExMo.Cell reads what exstore stores, so the
+# This app stores nothing, but EMotion.Cell reads what exstore stores, so the
 # suite needs the schema up and the sandbox in a known mode. Same shape as
 # exauth's helper and for the same reason: the mode is set both sides of the
 # migration so that a single-app run and an umbrella run both work, whichever

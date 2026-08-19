@@ -8,7 +8,7 @@ defmodule ExMove.Chain do
   `flange` is the offset from the last actuated joint to where a tool bolts on,
   and it comes from the mechanism rather than from a changeover: a URDF that
   ends in a run of fixed joints is describing exactly this. The two are
-  separate because they are owned by different people. `ExMo.Cell` composes
+  separate because they are owned by different people. `EMotion.Cell` composes
   them into the transform the solver takes.
 
   The engine works entirely in terms of joint indices. The axis_id mapping

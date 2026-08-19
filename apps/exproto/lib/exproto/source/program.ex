@@ -10,7 +10,7 @@ defmodule ExProto.Source.Program do
 
   @behaviour ExProto.Source
 
-  alias ExMo.Program.{Args, Editor, Kinds}
+  alias EMotion.Program.{Args, Editor, Kinds}
   alias ExProto.Program.Run
   alias ExStore.Program.{Statement, StatementRef}
   alias ExStore.{Frames, Points, Programs, Tools}
@@ -292,7 +292,7 @@ defmodule ExProto.Source.Program do
   # inline, because it is the one a person makes by mistyping.
   defp unresolved(kind, coerced) do
     kind.params
-    |> Enum.filter(&ExMo.Program.Kind.reference?/1)
+    |> Enum.filter(&EMotion.Program.Kind.reference?/1)
     |> Enum.filter(&Map.has_key?(coerced, &1.name))
     |> Enum.find_value(:ok, fn param ->
       name = Map.fetch!(coerced, param.name)

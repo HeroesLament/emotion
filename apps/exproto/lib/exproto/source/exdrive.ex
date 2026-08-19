@@ -36,8 +36,8 @@ defmodule ExProto.Source.Exdrive do
 
   require Logger
 
-  alias ExMo.Cell
-  alias ExMo.Schema.Registry
+  alias EMotion.Cell
+  alias EMotion.Schema.Registry
   alias ExMove.{CartesianStream, FK, Frame, IK, JointState}
   alias ExProto.Mode
 
@@ -724,7 +724,7 @@ defmodule ExProto.Source.Exdrive do
 
   defp field_value(_unknown, _status), do: {:error, :unknown_node}
 
-  # CiA 402 PDS → the vocabulary in ExMo.Schema.FromAxis.states/0.
+  # CiA 402 PDS → the vocabulary in EMotion.Schema.FromAxis.states/0.
   #
   # `switched_on` is energised but not accepting motion, which is exactly what
   # `ready` means; `operation_enabled` splits into `enabled` and `moving` on

@@ -38,8 +38,8 @@ defmodule ExProto.Program.Run do
 
   require Logger
 
-  alias ExMo.Cell
-  alias ExMo.Program.Kinds
+  alias EMotion.Cell
+  alias EMotion.Program.Kinds
   alias ExMove.{CartesianStream, JointState}
   alias ExProto.Mode
   alias ExStore.Program.{Statement, StatementRef}
@@ -284,7 +284,7 @@ defmodule ExProto.Program.Run do
   # Same argument as the jog watchdog: the thing that stops the machine must not
   # be the thing that might be broken.
   defp watch_for_death(runner) do
-    name = ExMo.Schema.Registry.arm_chain().name
+    name = EMotion.Schema.Registry.arm_chain().name
 
     spawn(fn ->
       ref = Process.monitor(runner)
@@ -514,7 +514,7 @@ defmodule ExProto.Program.Run do
 
   # ── The arm ───────────────────────────────────────────────────────────────
 
-  defp chain_name(%{chain: nil}), do: ExMo.Schema.Registry.arm_chain().name
+  defp chain_name(%{chain: nil}), do: EMotion.Schema.Registry.arm_chain().name
   defp chain_name(%{chain: chain}), do: chain.name
 
   defp queued(state) do

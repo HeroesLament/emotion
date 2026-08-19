@@ -3,7 +3,7 @@ defmodule ExProto.Validate do
   Checks a value against the JSON Schema fragment a node carries.
 
   Deliberately not a general JSON Schema implementation. It handles exactly the
-  shapes `ExMo.Projection.JSONRPC.TypeMap` produces — the schemas that can
+  shapes `EMotion.Projection.JSONRPC.TypeMap` produces — the schemas that can
   actually appear on a node — and refuses anything else rather than quietly
   accepting it.
 
@@ -96,7 +96,7 @@ defmodule ExProto.Validate do
   def check(_value, schema) do
     raise ArgumentError,
           "no validation rule for schema #{inspect(schema)}; " <>
-            "ExProto.Validate covers only what ExMo.Projection.JSONRPC.TypeMap emits"
+            "ExProto.Validate covers only what EMotion.Projection.JSONRPC.TypeMap emits"
   end
 
   # ── Helpers ───────────────────────────────────────────────────────────────

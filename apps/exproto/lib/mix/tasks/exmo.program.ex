@@ -31,7 +31,7 @@ defmodule Mix.Tasks.Exmo.Program do
 
   use Mix.Task
 
-  alias ExMo.Program.{Editor, Kinds}
+  alias EMotion.Program.{Editor, Kinds}
   alias ExStore.Program.Statement
   alias ExStore.Programs
 

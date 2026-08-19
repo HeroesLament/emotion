@@ -14,7 +14,7 @@ defmodule ExProto.Source.CellMasteringTest do
   """
 
   setup do
-    chain = ExMo.Schema.Registry.arm_chain()
+    chain = EMotion.Schema.Registry.arm_chain()
     ExMove.CartesianStream.release(chain.name)
 
     # Adopt the arm's drives rather than insisting on starting them: sibling

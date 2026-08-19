@@ -1,6 +1,6 @@
 defmodule Exdrive do
   @moduledoc """
-  Exdrive — CiA 402 motion drive library for ExMo.
+  Exdrive — CiA 402 motion drive library for EMotion.
 
   Quick start in iex:
 

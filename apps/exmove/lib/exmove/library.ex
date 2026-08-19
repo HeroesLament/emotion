@@ -5,7 +5,7 @@ defmodule ExMove.Library do
   This used to be where the controller and the Studio both got the arm from,
   and its own docstring said it would go away when the URDF loader landed. It
   has: the controller reads a URDF the machine was commissioned with, through
-  `ExMo.Cell.Loaded`.
+  `EMotion.Cell.Loaded`.
 
   What is left is a fixture. A chain built in code cannot fail to parse, which
   is exactly what you want underneath a test of something else — a Jacobian, a

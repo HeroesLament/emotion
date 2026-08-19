@@ -261,7 +261,7 @@ defmodule ExMove.URDF do
   # where a tool bolts on.
   #
   # That distinction is the answer to a question ROBOT.md left open. The flange
-  # is the mechanism's; the tool is what somebody fitted to it. `ExMo.Cell`
+  # is the mechanism's; the tool is what somebody fitted to it. `EMotion.Cell`
   # composes the two, and neither has to know about the other.
   defp collapse_fixed(joints) do
     {actuated, pending} =

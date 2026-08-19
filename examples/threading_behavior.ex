@@ -1,4 +1,4 @@
-defmodule ExMo.Behaviors.MiniLathe.Threading do
+defmodule EMotion.Behaviors.MiniLathe.Threading do
   @moduledoc """
   Public contract for the Threading behavior.
 
@@ -25,12 +25,12 @@ defmodule ExMo.Behaviors.MiniLathe.Threading do
     - Metric threads: pass standard: :metric, pitch_mm: 1.25 (M8 coarse)
   """
 
-  @behaviour ExMo.Behavior
+  @behaviour EMotion.Behavior
 
-  alias ExMo.Behavior.{Definition, RuntimeField, Fault}
-  alias ExMo.Schema.{Argument, ResultField}
+  alias EMotion.Behavior.{Definition, RuntimeField, Fault}
+  alias EMotion.Schema.{Argument, ResultField}
 
-  @impl ExMo.Behavior
+  @impl EMotion.Behavior
   def definition do
     %Definition{
       id:          "behavior.threading",

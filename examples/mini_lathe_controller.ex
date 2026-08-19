@@ -61,11 +61,11 @@ defmodule MiniLathe do
   # ── Information Model fragment ────────────────────────────────────────────
 
   @doc """
-  Returns the ExMo.Schema.Object fragment for this machine's axes.
-  Merged into the root model by ExMo.Schema.Registry.
+  Returns the EMotion.Schema.Object fragment for this machine's axes.
+  Merged into the root model by EMotion.Schema.Registry.
   """
   def axes_fragment do
-    alias ExMo.Schema.{Object, Property}
+    alias EMotion.Schema.{Object, Property}
 
     %Object{
       id:   "axes",
@@ -98,7 +98,7 @@ defmodule MiniLathe do
   end
 
   defp axis_properties(prefix) do
-    alias ExMo.Schema.Property
+    alias EMotion.Schema.Property
 
     [
       %Property{id: "#{prefix}.position",        name: "Position",       type: :float,  readable: true,  writable: false, observable: true},
@@ -114,9 +114,9 @@ defmodule MiniLathe do
   @doc "Returns behavior definition modules to be merged into the Behaviors.Catalog."
   def behaviors do
     [
-      ExMo.Behaviors.MiniLathe.Home,
-      ExMo.Behaviors.MiniLathe.SetSpindleSpeed,
-      ExMo.Behaviors.MiniLathe.Threading
+      EMotion.Behaviors.MiniLathe.Home,
+      EMotion.Behaviors.MiniLathe.SetSpindleSpeed,
+      EMotion.Behaviors.MiniLathe.Threading
     ]
   end
 end
