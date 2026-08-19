@@ -425,6 +425,37 @@ defmodule EMotion.ProgramsTest do
                Programs.dialog(state, :program_push_confirm, :ok)
     end
 
+    test "a path from wx arrives as a charlist and is still a path" do
+      # The bug: wx hands back charlists, Cedar's form dialog converts them and
+      # its file dialog did not, so `when is_binary(path)` matched nothing and
+      # the catch-all ate it. Save appeared to do nothing at all.
+      assert {_state, [{:file, {:open, "/tmp/weld.emp"}}]} =
+               Programs.dialog(Programs.new(), :program_open, {:ok, ~c"/tmp/weld.emp"})
+
+      state = with_statements(loaded())
+
+      assert {_state, [{:file, {:save, "pick", "/tmp/pick.emp"}}]} =
+               Programs.dialog(state, :program_save, {:ok, ~c"/tmp/pick.emp"})
+    end
+
+    test "and as a binary, because a client should not care which" do
+      assert {_state, [{:file, {:open, "/tmp/weld.emp"}}]} =
+               Programs.dialog(Programs.new(), :program_open, {:ok, "/tmp/weld.emp"})
+    end
+
+    test "a dialog result we cannot read says so instead of vanishing" do
+      # Silence is how the last one hid.
+      {state, effects} = Programs.dialog(loaded(), :program_save, {:ok, 42})
+      assert effects == []
+      assert Programs.message(state) =~ "Could not read the dialog result"
+    end
+
+    test "cancel is an answer, not an unreadable result" do
+      {state, effects} = Programs.dialog(loaded(), :program_save, :cancel)
+      assert effects == []
+      refute Programs.message(state) =~ "Could not read"
+    end
+
     test "a disconnect does not close the document" do
       # Closing somebody's file because a socket dropped would be the tool
       # deciding what they are working on.

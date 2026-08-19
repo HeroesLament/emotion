@@ -355,12 +355,17 @@ defmodule EMotion.Programs do
      [{:program, {:append, state.selected, state.pending_kind, args}}, :refresh]}
   end
 
-  def dialog(state, :program_open, {:ok, path}) when is_binary(path) do
-    {state, [{:file, {:open, path}}]}
+  # `is_binary` is not enough and was the bug: wx hands back charlists, Cedar's
+  # form dialog converts them and its file dialog did not, so a guard written
+  # after using the form dialog matched nothing and the catch-all below ate it.
+  # Cedar now converts too; this accepts either, because a client should not
+  # break on a toolkit detail it cannot see.
+  def dialog(state, :program_open, {:ok, path}) when is_binary(path) or is_list(path) do
+    {state, [{:file, {:open, IO.chardata_to_string(path)}}]}
   end
 
-  def dialog(state, :program_save, {:ok, path}) when is_binary(path) do
-    {state, [{:file, {:save, state.selected, path}}]}
+  def dialog(state, :program_save, {:ok, path}) when is_binary(path) or is_list(path) do
+    {state, [{:file, {:save, state.selected, IO.chardata_to_string(path)}}]}
   end
 
   def dialog(state, :program_push_confirm, confirmed) when confirmed in [:ok, :yes] do
@@ -368,6 +373,21 @@ defmodule EMotion.Programs do
   end
 
   def dialog(state, :program_push_confirm, _declined), do: {state, []}
+
+  # A dialog we asked for that came back in a shape we do not understand is a
+  # bug, and silence is how the last one hid. Cancel is not that — it is an
+  # answer, and it is handled above.
+  def dialog(state, id, result)
+      when id in [
+             :program_open,
+             :program_save,
+             :program_new,
+             :program_kind,
+             :program_args,
+             :program_push_confirm
+           ] do
+    {nothing(state, "Could not read the dialog result: #{inspect(result, limit: 3)}"), []}
+  end
 
   def dialog(state, _id, _result), do: {state, []}
 
