@@ -220,6 +220,7 @@ defmodule EMotion.Shell do
         prg_remove: :remove,
         prg_up: :up,
         prg_down: :down,
+        prg_cycle: :toggle_cycle,
         prg_start: :start,
         prg_hold: :hold,
         prg_resume: :resume,
@@ -387,7 +388,7 @@ defmodule EMotion.Shell do
   defp perform({:append, program, kind, args}), do: Program.append(program, kind, args)
   defp perform({:remove, program, seq}), do: Program.remove(program, seq)
   defp perform({:move, program, seq, to}), do: Program.move(program, seq, to)
-  defp perform({:start, name}), do: Program.start(name)
+  defp perform({:start, name, cycle}), do: Program.start(name, cycle: cycle)
   defp perform({:hold}), do: Program.hold()
   defp perform({:resume}), do: Program.resume()
   defp perform({:step}), do: Program.step()
@@ -743,6 +744,8 @@ defmodule EMotion.Shell do
       {:ensure_widget, :prg_remove, :button, :tab_programs, label: "Remove"},
       {:ensure_widget, :prg_up, :button, :tab_programs, label: "Up"},
       {:ensure_widget, :prg_down, :button, :tab_programs, label: "Down"},
+      {:ensure_widget, :prg_cycle, :button, :tab_programs, label: "Cycle: Single"},
+      {:set, :prg_cycle, label: "Cycle: " <> Programs.cycle_label(state)},
       {:ensure_widget, :prg_start, :button, :tab_programs, label: "Start"},
       {:ensure_widget, :prg_hold, :button, :tab_programs, label: "Hold"},
       {:ensure_widget, :prg_resume, :button, :tab_programs, label: "Resume"},
@@ -806,8 +809,8 @@ defmodule EMotion.Shell do
                   :prg_down]},
                 {:spacer, 8},
                 {:hbox, [],
-                 [:prg_start, {:spacer, 6}, :prg_hold, {:spacer, 6}, :prg_resume, {:spacer, 6},
-                  :prg_step, {:spacer, 6}, :prg_stop]}
+                 [:prg_cycle, {:spacer, 18}, :prg_start, {:spacer, 6}, :prg_hold, {:spacer, 6},
+                  :prg_resume, {:spacer, 6}, :prg_step, {:spacer, 6}, :prg_stop]}
               ]}
            ]},
           {:spacer, 6},

@@ -69,6 +69,16 @@ defmodule ExProto.Program.Run do
   defstruct [
     :mode,
     :program,
+    # Single or continuous, chosen when the run starts.
+    #
+    # A cycle is not a loop. `MVP-PLAN.md` §6 keeps `while` for the language,
+    # where it belongs and where it waits on the expression layer. This is the
+    # other thing pendants have always had and it is a property of the *run*:
+    # the same program, again, until somebody stops it. FANUC calls it
+    # continuous versus single cycle; it needs no control flow because it adds
+    # none — the body is unchanged and the index simply returns to zero.
+    :cycle,
+    :cycles,
     :body,
     :index,
     :status,
@@ -105,8 +115,13 @@ defmodule ExProto.Program.Run do
   build does not know — that last one being why an unloaded extension makes a
   program *refuse to start* rather than fail halfway down it.
   """
-  def start(program_name, server \\ __MODULE__) do
-    GenServer.call(server, {:start, program_name})
+  # Server second and options third, which is the order every existing caller
+  # already uses. Putting options second read better and silently rebound the
+  # server argument at fifteen call sites — two defaults on one function is a
+  # trap, and the compiler cannot see it because a module name is a valid
+  # keyword list right up until `Keyword.get/3` looks at it.
+  def start(program_name, server \\ __MODULE__, opts \\ []) do
+    GenServer.call(server, {:start, program_name, Keyword.get(opts, :cycle, :single)})
   end
 
   @doc "Stops the arm where it is. Resumable."
@@ -146,7 +161,16 @@ defmodule ExProto.Program.Run do
   end
 
   def idle_status do
-    %{program: "", state: :idle, statement: -1, statements: 0, kind: "", reason: ""}
+    %{
+      program: "",
+      state: :idle,
+      statement: -1,
+      statements: 0,
+      kind: "",
+      reason: "",
+      cycle: :single,
+      cycles: 0
+    }
   end
 
   # ── Server ────────────────────────────────────────────────────────────────
@@ -159,6 +183,8 @@ defmodule ExProto.Program.Run do
      %__MODULE__{
        mode: Keyword.get(opts, :mode, ExProto.Mode),
        status: :idle,
+       cycle: :single,
+       cycles: 0,
        index: 0,
        body: [],
        in_flight: [],
@@ -169,7 +195,7 @@ defmodule ExProto.Program.Run do
   end
 
   @impl GenServer
-  def handle_call({:start, _name}, _from, %{status: status} = state)
+  def handle_call({:start, _name, _cycle}, _from, %{status: status} = state)
       when status in [:running, :held] do
     # One program at a time. A second concurrent run is two things commanding one
     # arm, and the honest version of that is coordinated motion across groups,
@@ -177,7 +203,7 @@ defmodule ExProto.Program.Run do
     {:reply, {:error, {:already_running, state.program.name}}, state}
   end
 
-  def handle_call({:start, name}, _from, state) do
+  def handle_call({:start, name, cycle}, _from, state) do
     # Checked here rather than per statement, and before anything is fetched.
     #
     # A program is a sequence of poses, and a pose built on a joint that does
@@ -196,6 +222,8 @@ defmodule ExProto.Program.Run do
         state
         | program: program,
           body: body,
+          cycle: cycle,
+          cycles: 0,
           index: 0,
           in_flight: [],
           settling?: false,
@@ -394,6 +422,23 @@ defmodule ExProto.Program.Run do
 
   defp poll(_message, :once), do: Process.send_after(self(), {:advance, :once}, @poll_ms)
   defp poll(message, _continuous), do: Process.send_after(self(), message, @poll_ms)
+
+  # Drained first, in both cases. A cycle that restarted while the last move of
+  # the previous one was still queued would overlap two passes of the same
+  # program, and the arm would cut the corner between the end and the beginning
+  # — which is a different path from the one that was taught and tested.
+  defp finish(%{cycle: :continuous} = state) do
+    if drained?(state) do
+      cycles = state.cycles + 1
+      Logger.info("program #{state.program.name}: cycle #{cycles} complete, repeating")
+
+      %{state | index: 0, in_flight: [], settling?: false, cycles: cycles}
+      |> continue()
+    else
+      poll(:advance, :continuous)
+      state
+    end
+  end
 
   defp finish(state) do
     if drained?(state) do
@@ -619,7 +664,9 @@ defmodule ExProto.Program.Run do
       statement: executing,
       statements: length(state.body),
       kind: kind_at(state, executing),
-      reason: reason_string(state.reason)
+      reason: reason_string(state.reason),
+      cycle: state.cycle || :single,
+      cycles: state.cycles || 0
     }
   end
 

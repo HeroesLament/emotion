@@ -186,6 +186,50 @@ defmodule EMotion.ProgramsTest do
     end
   end
 
+  describe "the cycle toggle" do
+    test "single by default — continuous is chosen, never inherited" do
+      assert Programs.cycle_label(Programs.new()) == "Single"
+    end
+
+    test "toggling says what it became" do
+      # A toggle that changes silently is a mode you can be in without knowing.
+      {state, []} = Programs.action(Programs.new(), :toggle_cycle)
+      assert Programs.cycle_label(state) == "Continuous"
+      assert Programs.message(state) =~ "Continuous"
+
+      {state, []} = Programs.action(state, :toggle_cycle)
+      assert Programs.cycle_label(state) == "Single"
+    end
+
+    test "start carries the choice" do
+      state = with_statements(loaded())
+      assert {_s, [{:program, {:start, "pick", :single}}]} = Programs.action(state, :start)
+
+      {state, _} = Programs.action(state, :toggle_cycle)
+      assert {_s, [{:program, {:start, "pick", :continuous}}]} = Programs.action(state, :start)
+    end
+
+    test "the run line counts passes only once there has been more than one" do
+      # Zero is a number somebody has to interpret. During the first pass it
+      # says continuous instead.
+      first = Programs.ran(loaded(), %{name: "p", state: "running", statement: 1,
+                                       statements: 3, cycle: "continuous", cycles: 0})
+      assert Programs.run_line(first) =~ "continuous"
+      refute Programs.run_line(first) =~ "cycle 1"
+
+      later = Programs.ran(loaded(), %{name: "p", state: "running", statement: 1,
+                                       statements: 3, cycle: "continuous", cycles: 2})
+      assert Programs.run_line(later) =~ "cycle 3"
+    end
+
+    test "a single-cycle run says nothing about cycles" do
+      state = Programs.ran(loaded(), %{name: "p", state: "running", statement: 1,
+                                       statements: 3, cycle: "single", cycles: 0})
+      refute Programs.run_line(state) =~ "cycle"
+      refute Programs.run_line(state) =~ "continuous"
+    end
+  end
+
   describe "the mode selector" do
     test "start is greyed outside auto" do
       # The rule at the top of the module, applied to the module: a button that

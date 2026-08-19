@@ -83,15 +83,19 @@ defmodule EMotion.ProgramTest do
       end
     end
 
-    test "status reads six properties in one round trip" do
-      # Six reads would describe a program that was never in that state: a name
-      # from one moment and a statement index from the next.
+    test "status reads every property in one round trip" do
+      # The count is not the point and asserting it made this test fail when a
+      # property was added. Separate reads would describe a program that was
+      # never in that state: a name from one moment and a statement index from
+      # the next.
       %{pid: pid, opts: opts} = link({:ok, %{}})
       Program.status(opts)
-      {:read, ids} = StubLink.last(pid)
-      assert length(ids) == 6
+
+      assert {:read, ids} = StubLink.last(pid)
       assert "program.state" in ids
       assert "program.statement" in ids
+      assert "program.cycle" in ids
+      assert ids == Enum.uniq(ids)
     end
 
     test "teach_point omits optional arguments rather than sending nil" do

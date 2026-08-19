@@ -667,6 +667,27 @@ defmodule EMotion.Schema.Registry do
           read_grant: :read_state
         },
         %Property{
+          id: "program.cycle",
+          name: "Cycle",
+          description:
+            "`single` or `continuous`. Continuous runs the body again as soon " <>
+              "as the arm has finished, until the selector leaves auto or the " <>
+              "run is stopped. A property of the run rather than of the " <>
+              "program — a loop is a statement and this is not one.",
+          type: :string,
+          read_grant: :read_state
+        },
+        %Property{
+          id: "program.cycles",
+          name: "Cycles",
+          description:
+            "How many complete passes this run has finished. Zero during the " <>
+              "first pass, which is the honest count: a cycle is done when the " <>
+              "arm has arrived, not when the last statement was issued.",
+          type: :int32,
+          read_grant: :read_state
+        },
+        %Property{
           id: "program.kind",
           name: "Kind",
           description: "The kind of statement being executed, or empty",
@@ -931,7 +952,21 @@ defmodule EMotion.Schema.Registry do
       async: true,
       call_grant: :execute_program,
       input_args: [
-        %Argument{name: "name", type: :string, required: true, description: "The program to run"}
+        %Argument{name: "name", type: :string, required: true, description: "The program to run"},
+        %Argument{
+          name: "cycle",
+          type: :string,
+          required: false,
+          default: "single",
+          description:
+            "`single` runs the body once. `continuous` runs it again as soon " <>
+              "as the arm has finished, until the mode selector leaves auto or " <>
+              "`program.stop` is called.\n\nNot a loop — a loop is a statement " <>
+              "and belongs to the program. This is a property of the run, the " <>
+              "same distinction a pendant makes between continuous and single " <>
+              "cycle, and it adds no control flow: the body is unchanged and " <>
+              "the index returns to zero."
+        }
       ]
     }
   end

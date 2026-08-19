@@ -26,6 +26,8 @@ defmodule ExProto.Source.Program do
       "program.statements" -> {:ok, status.statements}
       "program.kind" -> {:ok, status.kind}
       "program.reason" -> {:ok, status.reason}
+      "program.cycle" -> {:ok, Atom.to_string(status.cycle)}
+      "program.cycles" -> {:ok, status.cycles}
       _unknown -> {:error, :unknown_node}
     end
   end
@@ -36,9 +38,15 @@ defmodule ExProto.Source.Program do
   @impl ExProto.Source
   def call("program.start", args, arg) do
     with {:ok, name} <- name(args) do
+      # Continuous runs the same body again until somebody stops it — the
+      # selector leaving auto, or `program.stop`. Not a loop: `MVP-PLAN.md` §6
+      # keeps `while` for the language, where it waits on expressions. This adds
+      # no control flow, it just declines to finish.
+      cycle = if Map.get(args, "cycle") == "continuous", do: :continuous, else: :single
+
       # The refusal is passed through rather than flattened, because "wrong
       # mode" and "no such program" are different things to do something about.
-      case Run.start(name, run_server(arg)) do
+      case Run.start(name, run_server(arg), cycle: cycle) do
         :ok -> :ok
         {:error, {:wrong_mode, mode}} -> {:error, {:wrong_mode, mode}}
         {:error, _reason} -> {:error, :rejected}

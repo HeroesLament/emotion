@@ -156,9 +156,16 @@ defmodule EMotion.Program do
   Returns as soon as the run is accepted — the arm has not moved yet. Watch
   `status/1`. Refused outside auto, refused while another program runs, and
   refused if the program uses a kind this build does not know.
+
+  `cycle: :continuous` runs the body again as soon as the arm has finished,
+  until the selector leaves auto or `stop/1` is called. Not a loop — a loop is
+  a statement and belongs to the program; this is a property of the run.
   """
   @spec start(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
-  def start(name, opts \\ []), do: Link.call("program.start", %{"name" => name}, opts)
+  def start(name, opts \\ []) do
+    cycle = if Keyword.get(opts, :cycle) == :continuous, do: "continuous", else: "single"
+    Link.call("program.start", %{"name" => name, "cycle" => cycle}, opts)
+  end
 
   @doc "Pauses at the end of the statement in flight. The arm finishes its move."
   @spec hold(keyword()) :: {:ok, map()} | {:error, term()}
@@ -195,7 +202,7 @@ defmodule EMotion.Program do
   @spec status(keyword()) :: {:ok, map()} | {:error, term()}
   def status(opts \\ []) do
     ids = ~w(program.name program.state program.statement program.statements
-             program.kind program.reason)
+             program.kind program.reason program.cycle program.cycles)
 
     with {:ok, values} <- EMotion.Link.read(ids, opts) do
       {:ok,
@@ -205,7 +212,9 @@ defmodule EMotion.Program do
          statement: values["program.statement"],
          statements: values["program.statements"],
          kind: values["program.kind"],
-         reason: values["program.reason"]
+         reason: values["program.reason"],
+         cycle: values["program.cycle"],
+         cycles: values["program.cycles"]
        }}
     end
   end

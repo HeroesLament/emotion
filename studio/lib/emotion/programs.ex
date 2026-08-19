@@ -61,6 +61,7 @@ defmodule EMotion.Programs do
             run: %{},
             pending_kind: nil,
             file: nil,
+            continuous?: false,
             mode: nil,
             fault?: false,
             connected?: false,
@@ -252,10 +253,22 @@ defmodule EMotion.Programs do
   end
 
   def action(%{selected: nil} = state, :start), do: {nothing(state, "Choose a program first"), []}
-  def action(state, :start), do: {state, [{:program, {:start, state.selected}}]}
+  def action(state, :start) do
+    cycle = if state.continuous?, do: :continuous, else: :single
+    {state, [{:program, {:start, state.selected, cycle}}]}
+  end
+
 
   def action(state, run) when run in [:hold, :resume, :step, :stop] do
     {state, [{:program, {run}}]}
+  end
+
+  # Toggled rather than a second Start button. Two buttons that both start
+  # something invite the wrong one being pressed, and the difference between
+  # them is exactly the thing you would not want pressed by accident.
+  def action(state, :toggle_cycle) do
+    state = %{state | continuous?: not state.continuous?}
+    {nothing(state, "Cycle: #{cycle_label(state)}"), []}
   end
 
   # ── Files ─────────────────────────────────────────────────────────────────
@@ -519,6 +532,11 @@ defmodule EMotion.Programs do
     }
   end
 
+  @doc "What the cycle toggle says."
+  @spec cycle_label(t()) :: String.t()
+  def cycle_label(%__MODULE__{continuous?: true}), do: "Continuous"
+  def cycle_label(%__MODULE__{}), do: "Single"
+
   @doc "What the open file is, in one line, or nil when there is none."
   @spec file_line(t()) :: String.t() | nil
   def file_line(%__MODULE__{file: nil}), do: nil
@@ -590,10 +608,20 @@ defmodule EMotion.Programs do
     total = run[:statements] || run["statements"]
     reason = run[:reason] || run["reason"] || ""
 
+    # The pass count only earns its place once there is more than one, and a
+    # continuous run that has not finished a pass yet says so rather than
+    # showing a zero somebody has to interpret.
+    cycles =
+      case {run[:cycle] || run["cycle"], run[:cycles] || run["cycles"]} do
+        {c, _} when c not in ["continuous", :continuous] -> ""
+        {_, n} when is_integer(n) and n > 0 -> "  ·  cycle #{n + 1}"
+        _first_pass -> "  ·  continuous"
+      end
+
     cond do
       name in [nil, ""] -> "No program loaded"
-      reason != "" -> "#{name}: #{state} at #{at}/#{total} — #{reason}"
-      true -> "#{name}: #{state} at #{at}/#{total}"
+      reason != "" -> "#{name}: #{state} at #{at}/#{total}#{cycles} — #{reason}"
+      true -> "#{name}: #{state} at #{at}/#{total}#{cycles}"
     end
   end
 
