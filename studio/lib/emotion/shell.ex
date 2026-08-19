@@ -29,6 +29,7 @@ defmodule EMotion.Shell do
   alias Cedar.Camera
   alias EMotion.{Boot, Cell, Controllers, Jog, Link, Navigator, Pendant, Program, Programs, Scene,
                  Teach, Workbench}
+  alias EMotion.Program.Bundle
   alias EMotion.Workbench.Registry
 
   require Logger
@@ -172,7 +173,14 @@ defmodule EMotion.Shell do
   end
 
   def handle_event({:dialog_result, id, result}, model)
-      when id in [:program_new, :program_kind, :program_args] do
+      when id in [
+             :program_new,
+             :program_kind,
+             :program_args,
+             :program_open,
+             :program_save,
+             :program_push_confirm
+           ] do
     {state, effects} = Programs.dialog(model.programs, id, result)
     run_program_effects(%{model | programs: state}, effects)
   end
@@ -205,6 +213,9 @@ defmodule EMotion.Shell do
         prg_new: :new,
         prg_delete: :delete,
         prg_refresh: :refresh,
+        prg_open: :open,
+        prg_save: :save_as,
+        prg_push: :push,
         prg_append: :append,
         prg_remove: :remove,
         prg_up: :up,
@@ -280,8 +291,8 @@ defmodule EMotion.Shell do
 
   defp run_program_effects(model, effects), do: Enum.reduce(effects, model, &run_program_effect/2)
 
-  defp run_program_effect({:dialog, id, opts}, model) do
-    Cedar.Renderer.render({:show_dialog, id, :form, :main, opts})
+  defp run_program_effect({:dialog, id, kind, opts}, model) do
+    Cedar.Renderer.render({:show_dialog, id, kind, :main, opts})
     model
   end
 
@@ -293,6 +304,82 @@ defmodule EMotion.Shell do
   end
 
   defp run_program_effect(:refresh, model), do: refresh_programs(model)
+
+  # Files. These are the one part of this tab that works with no controller
+  # attached, which is the point of a file existing at all.
+  defp run_program_effect({:file, {:open, path}}, model) do
+    case Bundle.load(path) do
+      {:ok, bundle} ->
+        %{model | programs: Programs.opened(model.programs, path, bundle, Bundle.hash(bundle))}
+
+      {:error, reason} ->
+        %{model | programs: Programs.failed(model.programs, describe_file(reason))}
+    end
+  end
+
+  defp run_program_effect({:file, {:save, name, path}}, model) do
+    with {:ok, bundle} <- Bundle.pull(name),
+         :ok <- Bundle.save(bundle, path) do
+      %{model | programs: Programs.opened(model.programs, path, bundle, Bundle.hash(bundle))}
+    else
+      {:error, reason} ->
+        %{model | programs: Programs.failed(model.programs, describe_file(reason))}
+    end
+  end
+
+  # Planned, then shown, then confirmed. A push that wrote first and reported
+  # after would be the implicit sync `PROGRAMS.md` refuses: "a tool that
+  # silently uploaded on save would make opening a file a way to change a
+  # machine."
+  defp run_program_effect({:file, {:plan_push, bundle}}, model) do
+    case Bundle.plan(bundle, []) do
+      {:ok, plan} ->
+        Cedar.Renderer.render(
+          {:show_dialog, :program_push_confirm, :message, :main,
+           caption: "Push #{bundle.name}?",
+           type: :ok_cancel,
+           icon: if(Enum.any?(plan, &match?({:refuse, _, _, _}, &1)), do: :warning, else: :question),
+           message: Bundle.describe(plan)}
+        )
+
+        model
+
+      {:error, reason} ->
+        %{model | programs: Programs.failed(model.programs, reason)}
+    end
+  end
+
+  defp run_program_effect({:file, {:push, nil}}, model), do: model
+
+  defp run_program_effect({:file, {:push, bundle}}, model) do
+    case Bundle.push(bundle, []) do
+      {:ok, done} ->
+        %{model | programs: Programs.ran(model.programs, %{})}
+        |> then(fn m ->
+          %{m | programs: %{m.programs | status: summarise(done)}}
+        end)
+
+      {:error, {:cell_not_commissioned, refusals}} ->
+        missing = Enum.map_join(refusals, ", ", fn {_, kind, name, _} -> "#{kind} #{name}" end)
+        %{model | programs: Programs.failed(model.programs, "cell has no #{missing}")}
+
+      {:error, reason} ->
+        %{model | programs: Programs.failed(model.programs, reason)}
+    end
+  end
+
+  defp summarise(done) do
+    failed = Enum.count(done, &match?({:failed, _, _, _}, &1))
+    if failed == 0, do: "Pushed: #{length(done)} items", else: "Pushed with #{failed} failure(s)"
+  end
+
+  defp describe_file({:hash_mismatch, _stored, _actual}),
+    do: "That file's contents do not match its own fingerprint"
+
+  defp describe_file(:not_a_program_file), do: "Not an E-Motion program file"
+  defp describe_file({:format_too_new, v}), do: "Written by a newer Studio (format #{v})"
+  defp describe_file(:enoent), do: "No such file"
+  defp describe_file(reason), do: reason
 
   defp perform({:create, name}), do: Program.create(name)
   defp perform({:delete, name}), do: Program.delete(name)
@@ -634,6 +721,10 @@ defmodule EMotion.Shell do
       {:ensure_widget, :prg_new, :button, :tab_programs, label: "New…"},
       {:ensure_widget, :prg_delete, :button, :tab_programs, label: "Delete"},
       {:ensure_widget, :prg_refresh, :button, :tab_programs, label: "Refresh"},
+      {:ensure_widget, :prg_open, :button, :tab_programs, label: "Open…"},
+      {:ensure_widget, :prg_save, :button, :tab_programs, label: "Save As…"},
+      {:ensure_widget, :prg_push, :button, :tab_programs, label: "Push"},
+      {:ensure_widget, :prg_file, :static_text, :tab_programs, label: ""},
       {:ensure_widget, :prg_append, :button, :tab_programs, label: "Add…"},
       {:ensure_widget, :prg_remove, :button, :tab_programs, label: "Remove"},
       {:ensure_widget, :prg_up, :button, :tab_programs, label: "Up"},
@@ -649,6 +740,10 @@ defmodule EMotion.Shell do
       {:set, :prg_new, enabled: enabled.new},
       {:set, :prg_delete, enabled: enabled.delete},
       {:set, :prg_refresh, enabled: enabled.refresh},
+      {:set, :prg_open, enabled: enabled.open},
+      {:set, :prg_save, enabled: enabled.save_as},
+      {:set, :prg_push, enabled: enabled.push},
+      {:set, :prg_file, label: Programs.file_line(state) || "No file open"},
       {:set, :prg_append, enabled: enabled.append},
       {:set, :prg_remove, enabled: enabled.remove},
       {:set, :prg_up, enabled: enabled.up},
@@ -670,7 +765,20 @@ defmodule EMotion.Shell do
              {:spacer, 12},
              {:vbox, [],
               [
-                {:hbox, [], [:prg_new, {:spacer, 6}, :prg_delete, {:spacer, 6}, :prg_refresh]},
+                {:hbox, [],
+                 [
+                   :prg_new,
+                   {:spacer, 6},
+                   :prg_delete,
+                   {:spacer, 6},
+                   :prg_refresh,
+                   {:spacer, 18},
+                   :prg_open,
+                   {:spacer, 6},
+                   :prg_save,
+                   {:spacer, 6},
+                   :prg_push
+                 ]},
                 {:spacer, 8},
                 {:hbox, [],
                  [:prg_append, {:spacer, 6}, :prg_remove, {:spacer, 6}, :prg_up, {:spacer, 6},
@@ -682,6 +790,8 @@ defmodule EMotion.Shell do
               ]}
            ]},
           {:spacer, 6},
+          :prg_file,
+          {:spacer, 2},
           :prg_status
         ]}}
     ]

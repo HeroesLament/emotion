@@ -208,7 +208,7 @@ defmodule EMotion.ProgramsTest do
   describe "adding a statement takes two dialogs" do
     test "the first offers the kinds the controller declared" do
       state = with_statements(loaded())
-      {_state, [{:dialog, :program_kind, opts}]} = Programs.action(state, :append)
+      {_state, [{:dialog, :program_kind, :form, opts}]} = Programs.action(state, :append)
       [{:kind, :choice, kind_opts}] = opts[:fields]
       assert kind_opts[:choices] == ["Move Joint", "Wait"]
     end
@@ -216,7 +216,8 @@ defmodule EMotion.ProgramsTest do
     test "the second is built from that kind's own parameters" do
       state = with_statements(loaded())
       {state, _} = Programs.action(state, :append)
-      {state, [{:dialog, :program_args, opts}]} = Programs.dialog(state, :program_kind, {:ok, %{"kind" => 0}})
+      {state, [{:dialog, :program_args, :form, opts}]} =
+        Programs.dialog(state, :program_kind, {:ok, %{"kind" => 0}})
 
       assert state.pending_kind == "move_joint"
       # A point is a choice of taught points, not a spelling test.
@@ -227,7 +228,7 @@ defmodule EMotion.ProgramsTest do
     test "a duration gets a text field carrying the kind's default" do
       state = with_statements(loaded())
 
-      {_state, [{:dialog, :program_args, opts}]} =
+      {_state, [{:dialog, :program_args, :form, opts}]} =
         Programs.dialog(state, :program_kind, {:ok, %{"kind" => 1}})
 
       assert [{:seconds, :text, seconds_opts}] = opts[:fields]
@@ -314,6 +315,82 @@ defmodule EMotion.ProgramsTest do
     test "with no program loaded it says so rather than showing nils" do
       assert Programs.ran(loaded(), %{name: "", state: "", statement: 0}).status ==
                "No program loaded"
+    end
+  end
+
+  describe "files" do
+    test "opening needs no controller — that is the point of a file" do
+      # Programming with no controller present is the whole reason a .emp
+      # exists. `PROGRAMS.md`: "Studio keeps an offline copy so a cell can be
+      # programmed with no controller present."
+      e = Programs.enabled(Programs.new())
+      assert e.open
+      refute e.push, "there is nothing to push to"
+    end
+
+    test "open asks for a file, not a form" do
+      {_state, [{:dialog, :program_open, :file_open, opts}]} =
+        Programs.action(Programs.new(), :open)
+
+      assert opts[:wildcard] =~ ".emp"
+    end
+
+    test "save needs a program chosen and offers its name" do
+      assert {_state, []} = Programs.action(loaded(), :save_as)
+
+      state = with_statements(loaded())
+      {_state, [{:dialog, :program_save, :file_save, opts}]} = Programs.action(state, :save_as)
+      assert opts[:default_file] == "pick.emp"
+    end
+
+    test "an opened file is held beside the controller's library, not merged into it" do
+      # The confusion this tab has already caused out loud: a list that could be
+      # either. The file is its own thing with its own fingerprint.
+      bundle = %EMotion.Program.Bundle{name: "weld", statements: [%{"seq" => 0}], points: [%{"name" => "a"}]}
+      state = Programs.opened(with_statements(loaded()), "/tmp/weld.emp", bundle, String.duplicate("a", 64))
+
+      assert state.programs == with_statements(loaded()).programs
+      assert Programs.file_line(state) =~ "weld.emp"
+      assert Programs.file_line(state) =~ "1 statement,"
+      assert Programs.file_line(state) =~ "1 point"
+    end
+
+    test "with no file open there is nothing to push" do
+      assert {_state, []} = Programs.action(with_statements(loaded()), :push)
+    end
+
+    test "push plans before it writes" do
+      bundle = %EMotion.Program.Bundle{name: "weld"}
+      state = Programs.opened(with_statements(loaded()), "/tmp/weld.emp", bundle, "abc")
+
+      assert {_state, [{:file, {:plan_push, ^bundle}}]} = Programs.action(state, :push)
+    end
+
+    test "confirming is what causes the write" do
+      # A push that wrote first and reported after would be the implicit sync
+      # PROGRAMS.md refuses: opening a file would become a way to change a
+      # machine.
+      bundle = %EMotion.Program.Bundle{name: "weld"}
+      state = Programs.opened(loaded(), "/tmp/weld.emp", bundle, "abc")
+
+      assert {_state, []} = Programs.dialog(state, :program_push_confirm, :cancel)
+      assert {_state, [{:file, {:push, ^bundle}}, :refresh]} =
+               Programs.dialog(state, :program_push_confirm, :ok)
+    end
+
+    test "a disconnect does not close the document" do
+      # Closing somebody's file because a socket dropped would be the tool
+      # deciding what they are working on.
+      bundle = %EMotion.Program.Bundle{name: "weld"}
+
+      state =
+        with_statements(loaded())
+        |> Programs.opened("/tmp/weld.emp", bundle, "abc")
+        |> Programs.disconnected()
+
+      assert state.file.bundle == bundle
+      assert Programs.enabled(state).open
+      refute Programs.enabled(state).push
     end
   end
 

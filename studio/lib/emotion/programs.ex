@@ -38,11 +38,19 @@ defmodule EMotion.Programs do
 
   alias EMotion.Program.Printer
 
-  @typedoc "Something the shell should do. Returned, never performed."
+  @typedoc """
+  Something the shell should do. Returned, never performed.
+
+  A dialog carries its kind, because opening a file is a file dialog and not a
+  form. The alternative — a second effect per dialog flavour — puts the
+  toolkit's vocabulary in a module whose whole point is not knowing there is a
+  toolkit.
+  """
   @type effect ::
-          {:dialog, atom(), keyword()}
+          {:dialog, atom(), atom(), keyword()}
           | :refresh
           | {:program, tuple()}
+          | {:file, tuple()}
 
   defstruct programs: [],
             selected: nil,
@@ -52,6 +60,7 @@ defmodule EMotion.Programs do
             points: [],
             run: %{},
             pending_kind: nil,
+            file: nil,
             connected?: false,
             status: "Not connected"
 
@@ -138,6 +147,9 @@ defmodule EMotion.Programs do
       remove: picked and not editing_blocked?(state),
       up: picked and not editing_blocked?(state) and state.statement > 0,
       down: picked and not editing_blocked?(state) and state.statement < length(state.statements) - 1,
+      open: true,
+      save_as: chosen,
+      push: connected and state.file != nil,
       start: chosen and idle?(state),
       hold: running?(state),
       resume: held?(state),
@@ -193,7 +205,8 @@ defmodule EMotion.Programs do
   @doc "A button. Returns the new state and what the shell should do."
   @spec action(t(), atom()) :: {t(), [effect()]}
   def action(state, :new) do
-    {state, [{:dialog, :program_new, title: "New Program", fields: [{:name, :text, label: "Name", value: ""}]}]}
+    {state, [{:dialog, :program_new, :form,
+        title: "New Program", fields: [{:name, :text, label: "Name", value: ""}]}]}
   end
 
   def action(%{selected: nil} = state, :delete), do: {state, []}
@@ -209,7 +222,7 @@ defmodule EMotion.Programs do
   def action(state, :append) do
     {state,
      [
-       {:dialog, :program_kind,
+       {:dialog, :program_kind, :form,
         title: "Add Statement",
         fields: [{:kind, :choice, label: "Kind", choices: kind_names(state), selected: 0}]}
      ]}
@@ -237,6 +250,41 @@ defmodule EMotion.Programs do
   def action(state, run) when run in [:hold, :resume, :step, :stop] do
     {state, [{:program, {run}}]}
   end
+
+  # ── Files ─────────────────────────────────────────────────────────────────
+  #
+  # A `.emp` is not a copy of a controller's program. It is its own thing, with
+  # no memory of where it came from — see `EMotion.Program.Bundle`. So the open
+  # file is held beside the controller's library rather than mixed into it, and
+  # the tab says which is which. A list that could be either is the question
+  # this tab has already made somebody ask out loud.
+
+  def action(state, :open) do
+    {state,
+     [
+       {:dialog, :program_open, :file_open,
+        message: "Open a program", wildcard: "E-Motion programs (*.emp)|*.emp|All files|*.*"}
+     ]}
+  end
+
+  def action(%{selected: nil} = state, :save_as), do: {state, []}
+
+  def action(state, :save_as) do
+    {state,
+     [
+       {:dialog, :program_save, :file_save,
+        message: "Save program",
+        default_file: "#{state.selected}.emp",
+        wildcard: "E-Motion programs (*.emp)|*.emp"}
+     ]}
+  end
+
+  def action(%{file: nil} = state, :push), do: {state, []}
+
+  # Planned first and confirmed second, always. `INSTALLATION.md` requires that
+  # reconciling two copies is something a person asks for, and a push that
+  # showed nothing before writing would not be asking.
+  def action(state, :push), do: {state, [{:file, {:plan_push, state.file.bundle}}]}
 
   def action(state, _unknown), do: {state, []}
 
@@ -273,7 +321,8 @@ defmodule EMotion.Programs do
 
       kind ->
         {%{state | pending_kind: kind["name"]},
-         [{:dialog, :program_args, title: kind["label"] || kind["name"], fields: arg_fields(state, kind)}]}
+         [{:dialog, :program_args, :form,
+           title: kind["label"] || kind["name"], fields: arg_fields(state, kind)}]}
     end
   end
 
@@ -286,6 +335,20 @@ defmodule EMotion.Programs do
     {%{state | pending_kind: nil},
      [{:program, {:append, state.selected, state.pending_kind, args}}, :refresh]}
   end
+
+  def dialog(state, :program_open, {:ok, path}) when is_binary(path) do
+    {state, [{:file, {:open, path}}]}
+  end
+
+  def dialog(state, :program_save, {:ok, path}) when is_binary(path) do
+    {state, [{:file, {:save, state.selected, path}}]}
+  end
+
+  def dialog(state, :program_push_confirm, confirmed) when confirmed in [:ok, :yes] do
+    {state, [{:file, {:push, state.file && state.file.bundle}}, :refresh]}
+  end
+
+  def dialog(state, :program_push_confirm, _declined), do: {state, []}
 
   def dialog(state, _id, _result), do: {state, []}
 
@@ -383,6 +446,34 @@ defmodule EMotion.Programs do
   @spec failed(t(), term()) :: t()
   def failed(%__MODULE__{} = state, reason), do: %{state | status: describe(reason)}
 
+  @doc """
+  A file was opened. Held beside the controller's library, never merged into it.
+  """
+  @spec opened(t(), String.t(), map(), String.t()) :: t()
+  def opened(%__MODULE__{} = state, path, bundle, hash) do
+    %{
+      state
+      | file: %{path: path, bundle: bundle, hash: hash},
+        status: "#{Path.basename(path)}  #{String.slice(hash, 0, 12)}"
+    }
+  end
+
+  @doc "What the open file is, in one line, or nil when there is none."
+  @spec file_line(t()) :: String.t() | nil
+  def file_line(%__MODULE__{file: nil}), do: nil
+
+  def file_line(%__MODULE__{file: file}) do
+    bundle = file.bundle
+    statements = length(bundle.statements || [])
+    points = length(bundle.points || [])
+
+    "#{Path.basename(file.path)}   #{String.slice(file.hash, 0, 12)}   " <>
+      "#{bundle.name} — #{statements} statement#{plural(statements)}, #{points} point#{plural(points)}"
+  end
+
+  defp plural(1), do: ""
+  defp plural(_n), do: "s"
+
   @doc "A controller arrived."
   @spec connected(t()) :: t()
   def connected(%__MODULE__{} = state) do
@@ -392,6 +483,9 @@ defmodule EMotion.Programs do
   @doc "It went away. What was on screen is now stale, and saying so is the job."
   @spec disconnected(t()) :: t()
   def disconnected(%__MODULE__{} = state) do
+    # The open file survives. Programming with no controller present is the
+    # whole reason a file exists, and closing somebody's document because a
+    # socket dropped would be the tool deciding what they are working on.
     %{state | connected?: false, programs: [], statements: [], kinds: [], points: [],
               selected: nil, statement: nil, run: %{}, status: "Not connected"}
   end
