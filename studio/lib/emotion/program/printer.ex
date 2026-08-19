@@ -112,10 +112,5 @@ defmodule EMotion.Program.Printer do
 
   defp tool_line(tool), do: to_string(tool["name"])
 
-  # Fixed precision, so a float's shortest representation changing across a
-  # JSON round trip cannot change the hash. Nine places is past anything this
-  # arm's encoders resolve and well inside a double.
-  defp number(nil), do: "0.000000000"
-  defp number(n) when is_number(n), do: :erlang.float_to_binary(n * 1.0, decimals: 9)
-  defp number(other), do: to_string(other)
+  defp number(value), do: EMotion.Canonical.number(value)
 end

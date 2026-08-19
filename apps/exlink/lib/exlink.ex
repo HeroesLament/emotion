@@ -155,10 +155,30 @@ defmodule ExLink do
     end
   end
 
-  defp collect(conn, ref, status, acc) do
+  # Collects one HTTP response, and puts back anything that was not part of it.
+  #
+  # `Mint.HTTP.stream/2` answers `:unknown` for a message that does not belong
+  # to this connection, and a bare `receive` takes whatever is at the front of
+  # the mailbox. Inside a GenServer that is destructive: `EMotion.Link` is also
+  # receiving joint telemetry, `:DOWN`s and its own casts, and a login that
+  # consumed one of those either crashed here or silently dropped it.
+  #
+  # Found by logging in as a second account on a link that already had traffic;
+  # the first login of a session works because the mailbox happens to be empty,
+  # which is the worst possible way for a bug like this to behave.
+  #
+  # Unrelated messages are stashed and re-sent once the response is complete,
+  # rather than re-sent as they arrive — sending back to a mailbox we are still
+  # selecting from would spin on the last message when it is the only one left.
+  defp collect(conn, ref, status, acc, stash \\ [])
+
+  defp collect(conn, ref, status, acc, stash) do
     receive do
       message ->
         case Mint.HTTP.stream(conn, message) do
+          :unknown ->
+            collect(conn, ref, status, acc, [message | stash])
+
           {:ok, conn, responses} ->
             status =
               Enum.find_value(responses, status, fn
@@ -174,18 +194,25 @@ defmodule ExLink do
                 end)
 
             if Enum.any?(responses, &match?({:done, ^ref}, &1)) do
+              replay(stash)
               {status, IO.iodata_to_binary(acc)}
             else
-              collect(conn, ref, status, acc)
+              collect(conn, ref, status, acc, stash)
             end
 
           {:error, _conn, _reason, _responses} ->
+            replay(stash)
             {status, IO.iodata_to_binary(acc)}
         end
     after
-      10_000 -> {status, IO.iodata_to_binary(acc)}
+      10_000 ->
+        replay(stash)
+        {status, IO.iodata_to_binary(acc)}
     end
   end
+
+  # Oldest first, so what was in the mailbox stays in the order it arrived.
+  defp replay(stash), do: stash |> Enum.reverse() |> Enum.each(&send(self(), &1))
 
   defp decode(""), do: %{}
 

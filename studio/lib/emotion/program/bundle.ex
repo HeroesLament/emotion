@@ -147,13 +147,11 @@ defmodule EMotion.Program.Bundle do
   there is nothing to reconcile, only something to tell apart.
   """
   @spec hash(t()) :: String.t()
-  def hash(%__MODULE__{} = bundle) do
-    :sha256 |> :crypto.hash(print(bundle)) |> Base.encode16(case: :lower)
-  end
+  def hash(%__MODULE__{} = bundle), do: bundle |> print() |> EMotion.Canonical.hash()
 
   @doc "The first twelve characters of `hash/1`, for showing a person."
   @spec short_hash(t()) :: String.t()
-  def short_hash(%__MODULE__{} = bundle), do: bundle |> hash() |> binary_part(0, 12)
+  def short_hash(%__MODULE__{} = bundle), do: bundle |> hash() |> EMotion.Canonical.short()
 
   # ── The file ──────────────────────────────────────────────────────────────
 

@@ -23,7 +23,7 @@ defmodule ExProto.Source.Cell do
   alias EMotion.Cell
   alias ExMove.CartesianStream
   alias ExStore.Cell.Point
-  alias ExStore.{Frames, Points, Tools}
+  alias ExStore.{Frames, Points, Robots, Tools}
 
   @impl ExProto.Source
   def read("cell.tool", _arg), do: {:ok, Cell.tool_name() || ""}
@@ -128,18 +128,7 @@ defmodule ExProto.Source.Cell do
   end
 
   def call("cell.list_frames", _args, _arg) do
-    frames =
-      for frame <- Frames.list() do
-        frame
-        |> pose_map()
-        |> Map.merge(%{
-          "name" => frame.name,
-          "parent" => parent_name(frame),
-          "mutable" => frame.mutable
-        })
-      end
-
-    {:ok, %{"frames" => frames}}
+    {:ok, %{"frames" => frame_list()}}
   end
 
   def call("cell.teach_tool", args, _arg) do
@@ -154,14 +143,7 @@ defmodule ExProto.Source.Cell do
   end
 
   def call("cell.list_tools", _args, _arg) do
-    tools =
-      for tool <- Tools.list() do
-        tool
-        |> pose_map()
-        |> Map.merge(%{"name" => tool.name, "fitted" => tool.fitted})
-      end
-
-    {:ok, %{"tools" => tools}}
+    {:ok, %{"tools" => tool_list()}}
   end
 
   # Refused while the arm is moving, and this is the interesting one.
@@ -188,21 +170,34 @@ defmodule ExProto.Source.Cell do
     end
   end
 
-  def call("cell.mastering", _args, _arg) do
-    axes =
-      for entry <- Cell.mastering() do
-        %{
-          "axis" => to_string(entry.axis_id),
-          "state" => to_string(entry.state),
-          # Zero rather than null for an axis with no zero. The wire type is a
-          # double and the client is a pendant; what makes "no zero" legible is
-          # the state field, which says it in a word.
-          "offset" => entry.offset || 0.0,
-          "drift" => entry.drift || 0.0
-        }
-      end
+  # Everything about this machine that is not a program, read once.
+  #
+  # Assembled here rather than by a client calling the four existing methods,
+  # because an installation is a *snapshot*. Four round trips can straddle a
+  # change — a frame taught between the second call and the third yields a
+  # backup of a machine that never existed, and a fingerprint over that is
+  # worse than none, since it looks authoritative.
+  #
+  # The three categories in `INSTALLATION.md` are all in here and are not
+  # equivalent: `robot` and `joints` describe a model of arm, `frames` and
+  # `tools` describe a cell, and `mastering` describes THIS unit and must never
+  # be written onto another one. The wire cannot enforce that; it can at least
+  # not pretend they are the same kind of thing.
+  def call("cell.installation", _args, _arg) do
+    robot = Robots.active()
 
-    {:ok, %{"axes" => axes}}
+    {:ok,
+     %{
+       "robot" => robot_map(robot),
+       "joints" => joint_settings(robot),
+       "frames" => frame_list(),
+       "tools" => tool_list(),
+       "mastering" => mastering_list()
+     }}
+  end
+
+  def call("cell.mastering", _args, _arg) do
+    {:ok, %{"axes" => mastering_list()}}
   end
 
   # No arm_still/0 check here, and that is not an omission: the DRIVE refuses
@@ -326,6 +321,68 @@ defmodule ExProto.Source.Cell do
       :idle -> :ok
       {:done, _reached} -> :ok
       _moving -> {:error, :rejected}
+    end
+  end
+
+  # ── One renderer per thing ────────────────────────────────────────────────
+  #
+  # Shared by the individual list methods and by `cell.installation`, rather
+  # than written twice. Two renderings of one row is how a backup ends up
+  # disagreeing with the screen that was used to check it.
+
+  defp frame_list do
+    for frame <- Frames.list() do
+      frame
+      |> pose_map()
+      |> Map.merge(%{
+        "name" => frame.name,
+        "parent" => parent_name(frame),
+        "mutable" => frame.mutable
+      })
+    end
+  end
+
+  defp tool_list do
+    for tool <- Tools.list() do
+      tool
+      |> pose_map()
+      |> Map.merge(%{"name" => tool.name, "fitted" => tool.fitted})
+    end
+  end
+
+  defp mastering_list do
+    for entry <- Cell.mastering() do
+      %{
+        "axis" => to_string(entry.axis_id),
+        "state" => to_string(entry.state),
+        # Zero rather than null for an axis with no zero. The wire type is a
+        # double and the client is a pendant; what makes "no zero" legible is
+        # the state field, which says it in a word.
+        "offset" => entry.offset || 0.0,
+        "drift" => entry.drift || 0.0
+      }
+    end
+  end
+
+  # A controller with no active robot is a controller nobody commissioned. That
+  # is a real state and it backs up as empty rather than failing — a backup of a
+  # half-built machine is exactly when you want one.
+  defp robot_map(nil), do: %{"name" => "", "urdf" => ""}
+  defp robot_map(robot), do: %{"name" => robot.name, "urdf" => robot.urdf || ""}
+
+  defp joint_settings(nil), do: []
+
+  defp joint_settings(robot) do
+    for setting <- Robots.settings(robot) do
+      %{
+        "joint" => setting.joint_name,
+        "axis" => setting.axis_id || "",
+        "max_vel" => setting.max_vel || 0.0,
+        "max_acc" => setting.max_acc || 0.0,
+        "soft_lower" => setting.soft_lower || 0.0,
+        "soft_upper" => setting.soft_upper || 0.0,
+        "home" => setting.home || 0.0
+      }
     end
   end
 end

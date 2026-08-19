@@ -158,6 +158,36 @@ defmodule EMotion.Schema.Registry do
           %ResultField{name: "description", type: :string, description: "What it means"}
         ]
       },
+      "type.joint_setting" => %StructType{
+        id: "type.joint_setting",
+        name: "JointSetting",
+        description:
+          "What commissioning says about one joint, keyed by the URDF's name " <>
+            "for it. A property of this model of arm rather than of this unit — " <>
+            "see INSTALLATION.md on why that distinction is worth keeping.",
+        fields: [
+          %ResultField{name: "joint", type: :string, description: "The URDF's name for it"},
+          %ResultField{name: "axis", type: :string, description: "Which drive drives it"},
+          %ResultField{name: "max_vel", type: :double, description: "Ceiling, rad/s"},
+          %ResultField{name: "max_acc", type: :double, description: "Ceiling, rad/s²"},
+          %ResultField{name: "soft_lower", type: :double, description: "Soft limit, rad"},
+          %ResultField{name: "soft_upper", type: :double, description: "Soft limit, rad"},
+          %ResultField{name: "home", type: :double, description: "Where home is, rad"}
+        ]
+      },
+      "type.installation_robot" => %StructType{
+        id: "type.installation_robot",
+        name: "InstallationRobot",
+        description:
+          "The robot description this controller was commissioned with. The " <>
+            "URDF travels as text because that is what it is; nothing here " <>
+            "describes how THIS unit differs from nominal, which is a gap " <>
+            "INSTALLATION.md names rather than fills.",
+        fields: [
+          %ResultField{name: "name", type: :string, description: "Its name"},
+          %ResultField{name: "urdf", type: :string, description: "The description, verbatim"}
+        ]
+      },
       "type.statement_ref" => %StructType{
         id: "type.statement_ref",
         name: "StatementReference",
@@ -1049,6 +1079,7 @@ defmodule EMotion.Schema.Registry do
         },
         mastering(),
         master_axis(),
+        installation(),
         teach_point(),
         forget_point(),
         list_points(),
@@ -1314,6 +1345,61 @@ defmodule EMotion.Schema.Registry do
           name: "tools",
           type: {:array, {:ref, "type.stored_tool"}},
           description: "Stored tools, by name"
+        }
+      ]
+    }
+  end
+
+  defp installation do
+    %Method{
+      id: "cell.installation",
+      name: "Installation",
+      description:
+        "Everything about this machine that is not a program, in one " <>
+          "consistent read: the robot it was commissioned with, what " <>
+          "commissioning said about each joint, the frames and tools of the " <>
+          "cell, and what every drive says about its own zero.\n\n" <>
+          "One call rather than five on purpose. An installation is a " <>
+          "snapshot, and five round trips can straddle a change — a frame " <>
+          "taught between the third call and the fourth produces a backup of " <>
+          "a machine that never existed, and a fingerprint over it means " <>
+          "nothing.\n\n" <>
+          "Behind `backup` rather than `read_state`, because taking a " <>
+          "machine's configuration off it is a maintenance act. The three " <>
+          "kinds of thing in here are not equivalent and `INSTALLATION.md` " <>
+          "says which is which: the cell and the robot model are portable, " <>
+          "and `mastering` belongs to this unit and must never be restored " <>
+          "onto another arm.",
+      async: false,
+      call_grant: :backup,
+      output_args: [
+        %ResultField{
+          name: "robot",
+          type: {:ref, "type.installation_robot"},
+          description: "The description this controller was commissioned with"
+        },
+        %ResultField{
+          name: "joints",
+          type: {:array, {:ref, "type.joint_setting"}},
+          description: "Commissioning, in the chain's own order, base to tip"
+        },
+        %ResultField{
+          name: "frames",
+          type: {:array, {:ref, "type.stored_frame"}},
+          description: "The cell's named places"
+        },
+        %ResultField{
+          name: "tools",
+          type: {:array, {:ref, "type.stored_tool"}},
+          description: "The cell's end-of-arm tools"
+        },
+        %ResultField{
+          name: "mastering",
+          type: {:array, {:ref, "type.axis_mastering"}},
+          description:
+            "What each drive says about its zero. Backed up so it can be " <>
+              "compared and so a board swap can be told what the old one " <>
+              "knew — never restored as part of restoring an installation."
         }
       ]
     }
