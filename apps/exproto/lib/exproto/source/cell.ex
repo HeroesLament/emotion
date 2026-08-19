@@ -67,6 +67,43 @@ defmodule ExProto.Source.Cell do
     end
   end
 
+  # A point that arrived from somewhere else, rather than from where the arm is.
+  #
+  # The refusals are the interesting part and `INSTALLATION.md` says they fall
+  # out of the categories rather than being bolted on. A frame or a tool is a
+  # claim about how the cell is physically built — where the fixture sits, what
+  # is bolted to the flange. A file asserting one it has never measured is the
+  # same class of act as pushing a mastering offset: it runs cleanly and lands
+  # in the wrong place. So a named frame or tool that this controller does not
+  # have is refused, and the refusal names it, because "this cell has not been
+  # commissioned for that job" is true and actionable where a fixture invented
+  # at the origin is neither.
+  def call("cell.define_point", args, _arg) do
+    with {:ok, name} <- name(args),
+         {:ok, joints} <- joint_vector(args),
+         {:ok, frame_id} <- referenced_frame(args),
+         {:ok, tool_id} <- referenced_tool(args),
+         {:ok, robot} <- active_robot() do
+      attrs =
+        args
+        |> pose()
+        |> Map.merge(%{
+          name: name,
+          joints: joints,
+          frame_id: frame_id,
+          tool_id: tool_id,
+          robot_id: robot.id
+        })
+
+      existed? = Points.by_name(name) != nil
+
+      case Points.define(attrs) do
+        {:ok, point} -> {:ok, %{"name" => point.name, "created" => not existed?}}
+        {:error, _changeset} -> {:error, :rejected}
+      end
+    end
+  end
+
   def call("cell.forget_point", args, _arg) do
     with {:ok, name} <- name(args) do
       case Points.by_name(name) do
@@ -92,7 +129,10 @@ defmodule ExProto.Source.Cell do
           "frame" => Cell.point_frame_name(point),
           "tool" => Cell.point_tool_name(point) || "",
           "joints" => Point.joints(point),
-          "mutable" => point.mutable
+          "mutable" => point.mutable,
+          # How it got its numbers. A pendant showing a program's points can
+          # say which ones this arm has never actually been to.
+          "source" => point.source || "taught"
         })
         |> Map.merge(base_pose(point))
       end
@@ -237,6 +277,21 @@ defmodule ExProto.Source.Cell do
         {:ok, offset} -> {:ok, %{"offset" => offset}}
         {:error, _reason} -> {:error, :rejected}
       end
+    end
+  end
+
+  # One axis, never several. Restoring an installation must not be able to carry
+  # mastering with it, and the way to guarantee that is for there to be no call
+  # that does more than one.
+  def call("cell.restore_mastering", args, _arg) do
+    with {:ok, axis} <- axis(args),
+         offset when is_number(offset) <- Map.get(args, "offset") do
+      case Cell.restore_mastering(axis, offset / 1) do
+        {:ok, stored} -> {:ok, %{"offset" => stored}}
+        {:error, _reason} -> {:error, :rejected}
+      end
+    else
+      _not_a_number -> {:error, :rejected}
     end
   end
 
@@ -391,6 +446,35 @@ defmodule ExProto.Source.Cell do
   # A controller with no active robot is a controller nobody commissioned. That
   # is a real state and it backs up as empty rather than failing — a backup of a
   # half-built machine is exactly when you want one.
+  # Required rather than solved for. See `cell.define_point`'s own description:
+  # a solved branch replayed as though it were recorded is the configuration
+  # flip the taught joint vector exists to remove.
+  defp joint_vector(args) do
+    case Map.get(args, "joints") do
+      list when is_list(list) and list != [] ->
+        if Enum.all?(list, &is_number/1), do: {:ok, Enum.map(list, &(&1 / 1))}, else: {:error, :rejected}
+
+      _absent ->
+        {:error, :rejected}
+    end
+  end
+
+  # nil for "not given", which is legitimate — a point in the base frame with a
+  # bare flange names neither. A name that IS given and is not there is a
+  # refusal, not a fallback to base: silently relocating somebody's point to
+  # the arm's origin is the worst of the available answers.
+  defp referenced_frame(args), do: referenced(args, "frame", &Frames.by_name/1)
+  defp referenced_tool(args), do: referenced(args, "tool", &Tools.by_name/1)
+
+  defp referenced(args, key, lookup) do
+    case Map.get(args, key) do
+      nil -> {:ok, nil}
+      "" -> {:ok, nil}
+      "base" when key == "frame" -> {:ok, nil}
+      name -> if row = lookup.(name), do: {:ok, row.id}, else: {:error, :rejected}
+    end
+  end
+
   defp active_robot do
     case Robots.active() do
       nil -> {:error, :rejected}

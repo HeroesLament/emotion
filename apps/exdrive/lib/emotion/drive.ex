@@ -191,7 +191,26 @@ defmodule EMotion.Drive do
   """
   @callback set_target_torque(axis_id(), float()) :: :ok
 
-  @optional_callbacks set_target_torque: 2
+  @doc """
+  Give this axis an offset directly, rather than deriving one from where it is.
+
+  The board-swap path. `master/2` says "the arm is at this angle, work out your
+  offset"; this says "your offset is this number", which is only ever true when
+  the number came off the board being replaced.
+
+  Optional because it is meaningless without an encoder that owns a zero — a
+  PWM axis has no offset to restore. On a CANopen drive this is object 0x607C.
+
+  Implementations must refuse unless the axis is currently unmastered.
+  `MASTERING.md`: a controller that pushed a stored offset back "would
+  eventually push a stale one, and the failure is silent... You find out at the
+  workpiece." An axis that already knows its zero is exactly the case where
+  writing one is wrong, and refusing there makes the stale push impossible
+  rather than merely discouraged.
+  """
+  @callback restore_master_offset(axis_id(), float()) :: :ok | {:error, term()}
+
+  @optional_callbacks set_target_torque: 2, restore_master_offset: 2
 
   # --- Resolution -----------------------------------------------------------
 

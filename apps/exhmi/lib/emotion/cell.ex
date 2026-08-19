@@ -82,6 +82,28 @@ defmodule EMotion.Cell do
   end
 
   @doc """
+  Gives an axis an offset that came off the board being replaced.
+
+  Not the same operation as `master_axis/2` and deliberately not reachable the
+  same way. Mastering says "the arm is at this angle"; this says "your offset
+  is this number", which is only true when the number came from the hardware
+  being swapped out.
+
+  Refused by the drive unless the axis is unmastered, which is what makes the
+  stale-restore failure impossible rather than merely discouraged. Recorded
+  with source `restored` so the shadow's history says how the number arrived —
+  `MASTERING.md` wants to answer "when did this change, and who changed it",
+  and "a person typed it in from a backup" is a different answer from "a drive
+  reported it".
+  """
+  def restore_mastering(axis_id, offset) when is_number(offset) do
+    with :ok <- EMotion.Axis.restore_master_offset(axis_id, offset) do
+      record_mastering(axis_id, offset, "restored")
+      {:ok, offset}
+    end
+  end
+
+  @doc """
   Writes down what the fleet currently says, and reports what changed.
 
   Called at boot. The findings are the point: an axis re-mastered underneath a

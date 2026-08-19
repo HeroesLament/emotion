@@ -224,6 +224,157 @@ defmodule EMotion.Program.Bundle do
     with {:ok, raw} <- File.read(path), do: from_json(raw)
   end
 
+  # ── Pushing ───────────────────────────────────────────────────────────────
+
+  @doc """
+  What pushing this bundle would do, without doing any of it.
+
+  Same contract as `EMotion.Installation.plan/2`: a person has to be able to
+  read what is about to happen to a machine. Steps are
+  `{action, kind, name, reason}`:
+
+      {:create, :point, "weld_start", nil}
+      {:replace, :program, "pick", nil}
+      {:refuse, :frame, "fixture_a", :not_in_this_cell}
+
+  **A missing frame or tool is a refusal, not something to install.** A point
+  is job data and installing one is what pushing a program means. A frame is a
+  claim about where a fixture physically sits, and a laptop asserting one it
+  has never measured is the same class of act as pushing a mastering offset —
+  it runs cleanly and lands in the wrong place. `INSTALLATION.md` records this
+  as falling out of the categories rather than being a rail bolted on.
+
+  The refusal is also the useful answer: it says this cell has not been
+  commissioned for this job, which is true and actionable, where a fixture
+  invented at the origin is neither.
+  """
+  @spec plan(t(), keyword()) :: {:ok, [tuple()]} | {:error, term()}
+  def plan(%__MODULE__{} = bundle, opts \\ []) do
+    with {:ok, points} <- Teach.list_points(opts),
+         {:ok, frames} <- Teach.list_frames(opts),
+         {:ok, tools} <- Teach.list_tools(opts),
+         {:ok, programs} <- Program.list(opts) do
+      have_points = MapSet.new(points, & &1["name"])
+      have_frames = MapSet.new(frames, & &1["name"])
+      have_tools = MapSet.new(tools, & &1["name"])
+      have_programs = MapSet.new(programs, & &1["name"])
+
+      {:ok,
+       Enum.concat([
+         missing(bundle.frames, have_frames, :frame),
+         missing(bundle.tools, have_tools, :tool),
+         Enum.map(Enum.sort_by(bundle.points, & &1["name"]), fn point ->
+           action = if MapSet.member?(have_points, point["name"]), do: :replace, else: :create
+           {action, :point, point["name"], nil}
+         end),
+         [
+           {if(MapSet.member?(have_programs, bundle.name), do: :replace, else: :create), :program,
+            bundle.name, nil}
+         ]
+       ])}
+    end
+  end
+
+  # Only what the cell is missing is worth a line. A frame the controller
+  # already has needs no action and saying "leave alone" for every one of them
+  # buries the one that matters.
+  defp missing(rows, have, kind) do
+    for row <- Enum.sort_by(rows, & &1["name"]),
+        not MapSet.member?(have, row["name"]),
+        do: {:refuse, kind, row["name"], :not_in_this_cell}
+  end
+
+  @doc """
+  Install this bundle on the connected controller.
+
+  Refuses as a whole if the cell is missing any frame or tool the bundle names
+  — nothing is written. Partly installing a program whose points cannot all
+  land would leave a program on the machine that names things that are not
+  there, and the controller would refuse to run it later with less context than
+  is available right now.
+
+  Otherwise: points first, then the program, because `program.append` refuses a
+  statement naming a point that does not exist yet. The program is replaced
+  rather than merged — a push installs the artifact, and merging two programs
+  that share a name is the reconciliation this design deliberately does not do.
+  """
+  @spec push(t(), keyword()) :: {:ok, [tuple()]} | {:error, term()}
+  def push(%__MODULE__{} = bundle, opts \\ []) do
+    with {:ok, plan} <- plan(bundle, opts) do
+      case Enum.filter(plan, &match?({:refuse, _, _, _}, &1)) do
+        [] -> {:ok, do_push(bundle, plan, opts)}
+        refusals -> {:error, {:cell_not_commissioned, refusals}}
+      end
+    end
+  end
+
+  defp do_push(%__MODULE__{} = bundle, plan, opts) do
+    points =
+      for {action, :point, name, _reason} <- plan do
+        point = Enum.find(bundle.points, &(&1["name"] == name))
+
+        case EMotion.Link.call("cell.define_point", point_args(point), opts) do
+          {:ok, _result} -> {action, :point, name, nil}
+          {:error, reason} -> {:failed, :point, name, reason}
+        end
+      end
+
+    points ++ [install_program(bundle, opts)]
+  end
+
+  # Delete and rebuild rather than diff. A program is an artifact here, not a
+  # working copy, so installing one means the machine ends up with exactly what
+  # the file says — including the absence of a statement somebody added on the
+  # pendant. Diffing would be reconciliation wearing a different hat.
+  defp install_program(%__MODULE__{} = bundle, opts) do
+    _ = Program.delete(bundle.name, opts)
+
+    with {:ok, _} <- Program.create(bundle.name, opts),
+         :ok <- append_all(bundle, opts) do
+      {:installed, :program, bundle.name, nil}
+    else
+      {:error, reason} -> {:failed, :program, bundle.name, reason}
+    end
+  end
+
+  defp append_all(%__MODULE__{} = bundle, opts) do
+    bundle.statements
+    |> Enum.sort_by(& &1["seq"])
+    |> Enum.reduce_while(:ok, fn statement, :ok ->
+      case Program.append(bundle.name, statement["kind"], statement["args"] || [], opts) do
+        {:ok, _seq} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp point_args(nil), do: %{}
+
+  defp point_args(point) do
+    %{
+      "name" => point["name"],
+      "joints" => point["joints"] || [],
+      "frame" => point["frame"] || "",
+      "tool" => point["tool"] || ""
+    }
+    |> Map.merge(Map.new(~w(x y z rx ry rz), fn k -> {k, point[k] || 0.0} end))
+  end
+
+  @doc "A plan or a result, in words. Same shape as `EMotion.Installation.describe/1`."
+  @spec describe([tuple()]) :: String.t()
+  def describe(steps) do
+    Enum.map_join(steps, "\n", fn {action, kind, name, reason} ->
+      note =
+        case reason do
+          nil -> ""
+          atom when is_atom(atom) -> "   (" <> String.replace(to_string(atom), "_", " ") <> ")"
+          other -> "   (" <> inspect(other) <> ")"
+        end
+
+      "#{String.pad_trailing(to_string(action), 10)} #{String.pad_trailing(to_string(kind), 8)} #{String.pad_trailing(to_string(name), 18)}#{note}"
+    end)
+  end
+
   @doc "A sensible file name for this bundle: `pick.emp`."
   @spec filename(t()) :: String.t()
   def filename(%__MODULE__{name: name}) do

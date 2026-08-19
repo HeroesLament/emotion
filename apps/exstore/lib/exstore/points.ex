@@ -30,8 +30,31 @@ defmodule ExStore.Points do
   `teach_frame` is one: a position that was taught slightly wrong and taught
   again is the same position.
   """
-  def teach(attrs) do
-    attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+  def teach(attrs), do: store(attrs, "taught")
+
+  @doc """
+  Records a point that arrived from somewhere else.
+
+  Same storage, different claim. `teach/1` means the arm was here and somebody
+  said so; this means a file said so. The joint vector that comes with it is a
+  measurement made on another machine, which is worth being able to tell apart
+  later — a pendant showing a program's points can say which ones this arm has
+  never actually been to.
+
+  It does not manufacture a joint vector. A point with no measured solution
+  would have to be solved, and `move_joint` "does not solve anything — it
+  commands the six angles that were recorded"; commanding a solver's opinion as
+  though it were a recording is the configuration-flip failure the taught joint
+  vector exists to remove. Planning a pose from geometry is a different feature
+  and is named as one in `INSTALLATION.md`.
+  """
+  def define(attrs), do: store(attrs, "defined")
+
+  defp store(attrs, source) do
+    attrs =
+      attrs
+      |> Map.new(fn {key, value} -> {to_string(key), value} end)
+      |> Map.put("source", source)
 
     case by_name(attrs["name"]) do
       nil -> %Point{} |> Point.changeset(attrs) |> validate_joint_count() |> Repo.insert()

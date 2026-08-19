@@ -29,6 +29,7 @@ defmodule ExStore.Cell.Point do
     field :ry, :float, default: 0.0
     field :rz, :float, default: 0.0
     field :mutable, :boolean, default: false
+    field :source, :string, default: "taught"
 
     field :joints, {:array, :float}, virtual: true
     field :joints_json, :string, source: :joints
@@ -49,7 +50,8 @@ defmodule ExStore.Cell.Point do
     point
     |> Pose.cast_name(attrs, @reserved)
     |> Pose.cast_pose(attrs)
-    |> cast(attrs, [:frame_id, :tool_id, :robot_id, :mutable])
+    |> cast(attrs, [:frame_id, :tool_id, :robot_id, :mutable, :source])
+    |> validate_inclusion(:source, ~w(taught defined))
     |> put_joints(attrs)
     |> validate_required([:robot_id])
     |> unique_constraint(:name)

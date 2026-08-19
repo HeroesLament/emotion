@@ -131,6 +131,24 @@ defmodule Exdrive.Flash do
     end)
   end
 
+  @doc """
+  Writes an offset directly, rather than deriving one from where the rotor is.
+
+  This is the board-swap path and nothing else. `master/3` says "the arm is at
+  this angle, work out the offset"; this says "your offset is this number",
+  which is only ever true when the number came off the board being replaced.
+
+  Kept separate from `master/3` for the reason `MASTERING.md` gives: a
+  controller that pushed a stored offset back would eventually push a stale
+  one, and the failure is silent. Two functions means the dangerous one has a
+  name you have to type on purpose.
+  """
+  def restore(axis_id, master_offset) when is_number(master_offset) do
+    upsert(axis_id, fn e ->
+      %{e | record: %Record{master_offset: master_offset * 1.0, position: (e.rotor || 0.0) * 1.0}}
+    end)
+  end
+
   @doc "A factory-fresh board: the page is blank. The rotor does not move."
   def erase(axis_id), do: upsert(axis_id, &%{&1 | record: nil})
 

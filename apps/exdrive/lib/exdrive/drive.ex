@@ -150,6 +150,18 @@ defmodule Exdrive.Drive do
   end
 
   @doc """
+  Give this axis an offset that came off a board being replaced.
+
+  Refused unless the axis is unmastered. A board that already knows its zero is
+  precisely the case where writing one is the stale-push failure, so the
+  refusal is the interlock rather than a note in a manual.
+  """
+  @impl EMotion.Drive
+  def restore_master_offset(axis_id, offset) when is_number(offset) do
+    :gen_statem.call(axis_name(axis_id), {:restore_master_offset, offset * 1.0})
+  end
+
+  @doc """
   Advance the simulation by `dt` seconds.
 
   Only meaningful for a drive started with `clock: :external`; an internally
@@ -341,6 +353,10 @@ defmodule Exdrive.Drive do
     {:keep_state, data, [{:reply, from, {:ok, data.master_offset}}]}
   end
 
+  def switch_on_disabled({:call, from}, {:restore_master_offset, offset}, data) do
+    do_restore(data, offset, from)
+  end
+
   def switch_on_disabled({:call, from}, :save, data) do
     Exdrive.Flash.save(data.axis_id, data.actual_position)
     {:keep_state_and_data, [{:reply, from, :ok}]}
@@ -379,6 +395,10 @@ defmodule Exdrive.Drive do
   def ready_to_switch_on({:call, from}, {:master, at}, data) do
     data = do_master(data, at)
     {:keep_state, data, [{:reply, from, {:ok, data.master_offset}}]}
+  end
+
+  def ready_to_switch_on({:call, from}, {:restore_master_offset, offset}, data) do
+    do_restore(data, offset, from)
   end
 
   def ready_to_switch_on({:call, from}, :save, data) do
@@ -428,6 +448,10 @@ defmodule Exdrive.Drive do
   def switched_on({:call, from}, {:master, at}, data) do
     data = do_master(data, at)
     {:keep_state, data, [{:reply, from, {:ok, data.master_offset}}]}
+  end
+
+  def switched_on({:call, from}, {:restore_master_offset, offset}, data) do
+    do_restore(data, offset, from)
   end
 
   def switched_on({:call, from}, :save, data) do
@@ -502,6 +526,10 @@ defmodule Exdrive.Drive do
     {:keep_state_and_data, [{:reply, from, {:error, :output_enabled}}]}
   end
 
+  def operation_enabled({:call, from}, {:restore_master_offset, _offset}, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, :output_enabled}}]}
+  end
+
   def operation_enabled({:call, from}, :save, data) do
     Exdrive.Flash.save(data.axis_id, data.actual_position)
     {:keep_state_and_data, [{:reply, from, :ok}]}
@@ -541,6 +569,10 @@ defmodule Exdrive.Drive do
   # coils — and a moving axis records a position that is stale by the time it
   # lands. The firmware answers SDO abort 0x08000022 to the same request.
   def quick_stop_active({:call, from}, {:master, _at}, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, :output_enabled}}]}
+  end
+
+  def quick_stop_active({:call, from}, {:restore_master_offset, _offset}, _data) do
     {:keep_state_and_data, [{:reply, from, {:error, :output_enabled}}]}
   end
 
@@ -768,6 +800,18 @@ defmodule Exdrive.Drive do
   # Declaring a zero and persisting it are one act, not two: a master that is
   # not committed is a number that disappears at the next power cut, and the
   # operator who set it has already walked away.
+  # Only onto an axis that does not already know its zero. See
+  # `EMotion.Drive.restore_master_offset/2` for why that is the whole interlock.
+  defp do_restore(%{mastering: :unmastered} = data, offset, from) do
+    Exdrive.Flash.restore(data.axis_id, offset)
+    data = resolve_mastering(data)
+    {:keep_state, data, [{:reply, from, :ok}]}
+  end
+
+  defp do_restore(_data, _offset, from) do
+    {:keep_state_and_data, [{:reply, from, {:error, :already_mastered}}]}
+  end
+
   defp do_master(data, joint_zero_is) do
     Exdrive.Flash.master(data.axis_id, data.actual_position, joint_zero_is)
     resolve_mastering(data)

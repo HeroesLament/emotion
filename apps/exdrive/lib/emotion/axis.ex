@@ -78,6 +78,23 @@ defmodule EMotion.Axis do
   end
 
   @doc """
+  Give this axis an offset that came off a board being replaced.
+
+  Raises for a drive that has no encoder zero to restore, rather than doing
+  nothing quietly — the same reasoning as torque below. Silence here would mean
+  a maintainer believing a replacement board had been given its number.
+  """
+  def restore_master_offset(axis_id, offset) do
+    if Drive.supports?(axis_id, {:restore_master_offset, 2}) do
+      Drive.for(axis_id).restore_master_offset(axis_id, offset)
+    else
+      raise ArgumentError,
+            "axis #{inspect(axis_id)} is backed by #{inspect(Drive.for(axis_id))}, " <>
+              "which has no encoder zero to restore"
+    end
+  end
+
+  @doc """
   Command a torque — PT and CST modes.
 
   Optional in the contract, so this raises rather than silently doing nothing

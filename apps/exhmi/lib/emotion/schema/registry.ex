@@ -255,6 +255,17 @@ defmodule EMotion.Schema.Registry do
                 name: "mutable",
                 type: :boolean,
                 description: "Whether a running program may write this point"
+              },
+              %ResultField{
+                name: "source",
+                type: :string,
+                description:
+                  "How it got its numbers: `taught` if the arm was here and " <>
+                    "somebody said so, `defined` if a file did — a program " <>
+                    "pushed from a studio, or a backup. Not a quality ranking; " <>
+                    "a different fact is missing in each, and a pendant that " <>
+                    "cannot tell them apart cannot warn anybody that a program " <>
+                    "moves to places this arm has never been to."
               }
             ] ++ base_pose_fields()
       },
@@ -1079,9 +1090,11 @@ defmodule EMotion.Schema.Registry do
         },
         mastering(),
         master_axis(),
+        restore_mastering(),
         installation(),
         commission(),
         teach_point(),
+        define_point(),
         forget_point(),
         list_points(),
         teach_frame(),
@@ -1347,6 +1360,107 @@ defmodule EMotion.Schema.Registry do
           type: {:array, {:ref, "type.stored_tool"}},
           description: "Stored tools, by name"
         }
+      ]
+    }
+  end
+
+  defp restore_mastering do
+    %Method{
+      id: "cell.restore_mastering",
+      name: "RestoreMastering",
+      description:
+        "Gives one axis an offset that came off the board being replaced.\n\n" <>
+          "This is not `master_axis` and the difference is the point of the " <>
+          "method existing. Mastering says \"the arm is at this angle, work " <>
+          "out your offset\". This says \"your offset is this number\", which " <>
+          "is only ever true when the number came from the hardware being " <>
+          "swapped out.\n\n" <>
+          "**Refused unless the axis is currently unmastered.** A board that " <>
+          "already knows its zero is exactly the case where writing one is " <>
+          "wrong, so the refusal makes the failure impossible rather than " <>
+          "discouraged. `MASTERING.md`: a controller that pushed a stored " <>
+          "offset back \"would eventually push a stale one, and the failure is " <>
+          "silent — every joint would still report a plausible angle, every " <>
+          "move would still execute cleanly, and the work would land somewhere " <>
+          "other than where it was taught. Nothing faults. You find out at the " <>
+          "workpiece.\"\n\n" <>
+          "Behind `restore`, which is a maintainer grant, and per axis rather " <>
+          "than per installation: restoring an installation must never carry " <>
+          "mastering with it, and the way to guarantee that is for there to be " <>
+          "no call that does several at once.",
+      async: false,
+      call_grant: :restore,
+      input_args: [
+        %Argument{name: "axis", type: :string, required: true, description: "Which joint"},
+        %Argument{
+          name: "offset",
+          type: :double,
+          required: true,
+          description: "The offset the replaced board reported, radians"
+        }
+      ],
+      output_args: [
+        %ResultField{name: "offset", type: :double, description: "What the drive now holds"}
+      ]
+    }
+  end
+
+  defp define_point do
+    %Method{
+      id: "cell.define_point",
+      name: "DefinePoint",
+      description:
+        "Records a point that arrived from somewhere else — a program file " <>
+          "pushed from a studio, or a backup — rather than from where the arm " <>
+          "is standing.\n\n" <>
+          "This is the counterpart to `teach_point` and the difference is the " <>
+          "whole reason it is a separate method. Teaching means the arm was " <>
+          "here and somebody said so. This means a file said so. The stored " <>
+          "point records which, so a pendant can later show that a program " <>
+          "moves to places this arm has never been to.\n\n" <>
+          "**The joint solution is required.** It is not solved here and not " <>
+          "defaulted. `move_joint` commands the six angles that were recorded " <>
+          "rather than solving anything, so a point whose angles came from a " <>
+          "solver would have a branch nobody chose, replayed as though " <>
+          "somebody had — which is the configuration flip the taught joint " <>
+          "vector exists to remove. A pose pushed from a controller carries " <>
+          "the vector that was measured there; a pose computed from geometry " <>
+          "does not, and planning one is a different feature.\n\n" <>
+          "Behind `load_program`, because installing a program's points is " <>
+          "part of loading the program. Re-defining an existing name moves it, " <>
+          "the same way re-teaching does.",
+      async: false,
+      call_grant: :load_program,
+      input_args:
+        [
+          %Argument{name: "name", type: :string, required: true, description: "What to call it"}
+        ] ++
+          pose_arguments("the point") ++
+          [
+            %Argument{
+              name: "joints",
+              type: {:array, :double},
+              required: true,
+              description:
+                "The joint solution this pose was measured in, base to tip. " <>
+                  "Required: see above on why it is not solved for."
+            },
+            %Argument{
+              name: "frame",
+              type: :string,
+              required: false,
+              description: "The frame the pose is expressed in. Refused if absent from the cell."
+            },
+            %Argument{
+              name: "tool",
+              type: :string,
+              required: false,
+              description: "The tool it was measured with. Refused if absent from the cell."
+            }
+          ],
+      output_args: [
+        %ResultField{name: "name", type: :string, description: "The point that was defined"},
+        %ResultField{name: "created", type: :boolean, description: "Whether it is new"}
       ]
     }
   end
