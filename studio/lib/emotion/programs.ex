@@ -216,7 +216,7 @@ defmodule EMotion.Programs do
         title: "New Program", fields: [{:name, :text, label: "Name", value: ""}]}]}
   end
 
-  def action(%{selected: nil} = state, :delete), do: {state, []}
+  def action(%{selected: nil} = state, :delete), do: {nothing(state, "Choose a program first"), []}
 
   def action(state, :delete) do
     {state, [{:program, {:delete, state.selected}}, :refresh]}
@@ -224,7 +224,7 @@ defmodule EMotion.Programs do
 
   def action(state, :refresh), do: {state, [:refresh]}
 
-  def action(%{selected: nil} = state, :append), do: {state, []}
+  def action(%{selected: nil} = state, :append), do: {nothing(state, "Choose a program first"), []}
 
   def action(state, :append) do
     {state,
@@ -236,7 +236,7 @@ defmodule EMotion.Programs do
   end
 
   def action(%{statement: nil} = state, action) when action in [:remove, :up, :down] do
-    {state, []}
+    {nothing(state, "Choose a statement first"), []}
   end
 
   def action(state, :remove) do
@@ -251,7 +251,7 @@ defmodule EMotion.Programs do
     move(state, state.statement + 1)
   end
 
-  def action(%{selected: nil} = state, :start), do: {state, []}
+  def action(%{selected: nil} = state, :start), do: {nothing(state, "Choose a program first"), []}
   def action(state, :start), do: {state, [{:program, {:start, state.selected}}]}
 
   def action(state, run) when run in [:hold, :resume, :step, :stop] do
@@ -274,7 +274,8 @@ defmodule EMotion.Programs do
      ]}
   end
 
-  def action(%{selected: nil} = state, :save_as), do: {state, []}
+  def action(%{selected: nil} = state, :save_as),
+    do: {nothing(state, "Choose a program to save"), []}
 
   def action(state, :save_as) do
     {state,
@@ -286,7 +287,8 @@ defmodule EMotion.Programs do
      ]}
   end
 
-  def action(%{file: nil} = state, :push), do: {state, []}
+  def action(%{file: nil} = state, :push),
+    do: {nothing(state, "No file open — Save As… or Open… one first"), []}
 
   # Planned first and confirmed second, always. `INSTALLATION.md` requires that
   # reconciling two copies is something a person asks for, and a push that
@@ -295,11 +297,21 @@ defmodule EMotion.Programs do
 
   def action(state, _unknown), do: {state, []}
 
-  defp move(state, to) when to < 0, do: {state, []}
+  # A button that does nothing must say why it did nothing.
+  #
+  # This is the greyed-button rule at the top of this module, one step further
+  # on. `clear_message/1` runs before every action, so an action that returns no
+  # effects used to leave the line blank — which is the same silence the
+  # zero-width labels produced, arrived at from the opposite direction. Pressing
+  # a control and watching the only feedback disappear is worse than pressing
+  # one and seeing nothing change.
+  defp nothing(state, why), do: %{state | message: why}
+
+  defp move(state, to) when to < 0, do: {nothing(state, "Already first"), []}
 
   defp move(state, to) do
     if to > length(state.statements) - 1 do
-      {state, []}
+      {nothing(state, "Already last"), []}
     else
       # The selection follows the statement, not the row. Moving something and
       # then finding the next click acts on its neighbour is how a wrong
