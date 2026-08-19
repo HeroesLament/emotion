@@ -1,0 +1,421 @@
+defmodule EMotion.Programs do
+  @moduledoc """
+  The Programs tab: the program library, the statements in one, and the run.
+
+  Same shape as `EMotion.Controllers` and for the same reason — everything here
+  is a pure function of a small state struct, and every action returns
+  `{state, effects}` rather than doing anything. Which buttons are live in which
+  run state is the part of this tab most likely to be wrong, and it is exactly
+  the part that is testable with no window open and no controller attached.
+
+  ## Nothing here is a copy of the program
+
+  The list, the statements and the run state are all *last known* — read from
+  the controller and redisplayed. The program lives on the controller. A studio
+  that held its own copy would be a second source of truth for the thing the
+  arm is about to do, and the two would agree right up until somebody edited
+  one from a pendant.
+
+  So every edit is a round trip, and `:refresh` after a write is not laziness:
+  it is the only way the tab can be sure what it is showing.
+
+  ## Appending a statement takes two dialogs, on purpose
+
+  A statement's arguments depend on its kind, and a dialog's fields are fixed
+  when it opens. So the kind is chosen first, and the second dialog is built
+  from *that kind's declared parameters* — which is the whole return on the
+  controller declaring them. A build that loads an extension offers it here
+  without this module being edited, and a studio older than a kind still draws
+  a correct form for it.
+
+  ## Run controls follow the run, not the user's optimism
+
+  `Start` is live only when a program is selected and nothing is running.
+  `Hold` only while running, `Resume` and `Step` only while held, `Stop` while
+  either. A button that can be pressed and refused teaches an operator that the
+  interface is lying to them, which is worse than a greyed-out button.
+  """
+
+  @typedoc "Something the shell should do. Returned, never performed."
+  @type effect ::
+          {:dialog, atom(), keyword()}
+          | :refresh
+          | {:program, tuple()}
+
+  defstruct programs: [],
+            selected: nil,
+            statements: [],
+            statement: nil,
+            kinds: [],
+            points: [],
+            run: %{},
+            pending_kind: nil,
+            connected?: false,
+            status: "Not connected"
+
+  @type t :: %__MODULE__{}
+
+  @doc "An empty tab."
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  # ── What the widgets show ─────────────────────────────────────────────────
+
+  @doc "Program names, for the library list."
+  @spec labels(t()) :: [String.t()]
+  def labels(%__MODULE__{programs: programs}) do
+    Enum.map(programs, fn p ->
+      case p["statements"] do
+        n when is_integer(n) -> "#{p["name"]}  (#{n})"
+        _ -> to_string(p["name"])
+      end
+    end)
+  end
+
+  @doc """
+  Statement lines, numbered from zero and marked with where the run is.
+
+      ▶ 2  move_joint   point=weld_start
+
+  The marker is on the statement the controller says it is *on*, which during a
+  motion is the one still moving rather than the one that finished.
+  """
+  @spec statement_labels(t()) :: [String.t()]
+  def statement_labels(%__MODULE__{} = state) do
+    current = running_statement(state)
+
+    Enum.map(state.statements, fn s ->
+      seq = s["seq"]
+      marker = if seq == current, do: "▶", else: " "
+      refs = s["refs"] || ""
+      args = s["args"] || ""
+      detail = [refs, args] |> Enum.reject(&(&1 == "")) |> Enum.join("  ")
+      "#{marker} #{String.pad_leading(to_string(seq), 2)}  #{String.pad_trailing(to_string(s["kind"]), 12)} #{detail}"
+    end)
+  end
+
+  @doc "Kind names, for the palette."
+  @spec kind_names(t()) :: [String.t()]
+  def kind_names(%__MODULE__{kinds: kinds}) do
+    Enum.map(kinds, fn k -> k["label"] || k["name"] end)
+  end
+
+  @doc "Index of the selected program in `labels/1`, or -1."
+  @spec selected_index(t()) :: integer()
+  def selected_index(%__MODULE__{selected: nil}), do: -1
+
+  def selected_index(%__MODULE__{} = state) do
+    Enum.find_index(state.programs, &(&1["name"] == state.selected)) || -1
+  end
+
+  @doc "Index of the selected statement, or -1."
+  @spec statement_index(t()) :: integer()
+  def statement_index(%__MODULE__{statement: nil}), do: -1
+
+  def statement_index(%__MODULE__{} = state) do
+    Enum.find_index(state.statements, &(&1["seq"] == state.statement)) || -1
+  end
+
+  @doc """
+  Which buttons are live.
+
+  Editing is refused by the controller while the program it is given is the one
+  running, so it is greyed here rather than offered and refused.
+  """
+  @spec enabled(t()) :: map()
+  def enabled(%__MODULE__{} = state) do
+    connected = state.connected?
+    chosen = connected and state.selected != nil
+    picked = chosen and state.statement != nil
+    editable = chosen and not editing_blocked?(state)
+
+    %{
+      new: connected,
+      delete: editable,
+      refresh: connected,
+      append: editable and state.kinds != [],
+      remove: picked and not editing_blocked?(state),
+      up: picked and not editing_blocked?(state) and state.statement > 0,
+      down: picked and not editing_blocked?(state) and state.statement < length(state.statements) - 1,
+      start: chosen and idle?(state),
+      hold: running?(state),
+      resume: held?(state),
+      step: held?(state),
+      stop: running?(state) or held?(state)
+    }
+  end
+
+  @doc "Whether a run is active, which is when the tab wants polling."
+  @spec active?(t()) :: boolean()
+  def active?(%__MODULE__{} = state), do: running?(state) or held?(state)
+
+  defp run_state(%__MODULE__{run: run}), do: run[:state] || run["state"]
+  defp running?(state), do: run_state(state) == "running"
+  defp held?(state), do: run_state(state) == "held"
+  defp idle?(state), do: not (running?(state) or held?(state))
+
+  # The controller refuses an edit only for the program that is running. A
+  # different program is fair game, which matters: fixing the next job while
+  # this one runs is most of what a shift looks like.
+  defp editing_blocked?(%__MODULE__{} = state) do
+    active?(state) and (state.run[:name] || state.run["name"]) == state.selected
+  end
+
+  defp running_statement(%__MODULE__{} = state) do
+    if active?(state) and (state.run[:name] || state.run["name"]) == state.selected do
+      state.run[:statement] || state.run["statement"]
+    end
+  end
+
+  # ── Selection ─────────────────────────────────────────────────────────────
+
+  @doc "Choose a program. Its statements are stale until the shell refreshes them."
+  @spec select(t(), integer()) :: {t(), [effect()]}
+  def select(%__MODULE__{} = state, index) do
+    case Enum.at(state.programs, index) do
+      nil -> {state, []}
+      program -> {%{state | selected: program["name"], statement: nil, statements: []}, [:refresh]}
+    end
+  end
+
+  @doc "Choose a statement."
+  @spec select_statement(t(), integer()) :: t()
+  def select_statement(%__MODULE__{} = state, index) do
+    case Enum.at(state.statements, index) do
+      nil -> state
+      statement -> %{state | statement: statement["seq"]}
+    end
+  end
+
+  # ── Actions ───────────────────────────────────────────────────────────────
+
+  @doc "A button. Returns the new state and what the shell should do."
+  @spec action(t(), atom()) :: {t(), [effect()]}
+  def action(state, :new) do
+    {state, [{:dialog, :program_new, title: "New Program", fields: [{:name, :text, label: "Name", value: ""}]}]}
+  end
+
+  def action(%{selected: nil} = state, :delete), do: {state, []}
+
+  def action(state, :delete) do
+    {state, [{:program, {:delete, state.selected}}, :refresh]}
+  end
+
+  def action(state, :refresh), do: {state, [:refresh]}
+
+  def action(%{selected: nil} = state, :append), do: {state, []}
+
+  def action(state, :append) do
+    {state,
+     [
+       {:dialog, :program_kind,
+        title: "Add Statement",
+        fields: [{:kind, :choice, label: "Kind", choices: kind_names(state), selected: 0}]}
+     ]}
+  end
+
+  def action(%{statement: nil} = state, action) when action in [:remove, :up, :down] do
+    {state, []}
+  end
+
+  def action(state, :remove) do
+    {%{state | statement: nil}, [{:program, {:remove, state.selected, state.statement}}, :refresh]}
+  end
+
+  def action(state, :up) do
+    move(state, state.statement - 1)
+  end
+
+  def action(state, :down) do
+    move(state, state.statement + 1)
+  end
+
+  def action(%{selected: nil} = state, :start), do: {state, []}
+  def action(state, :start), do: {state, [{:program, {:start, state.selected}}]}
+
+  def action(state, run) when run in [:hold, :resume, :step, :stop] do
+    {state, [{:program, {run}}]}
+  end
+
+  def action(state, _unknown), do: {state, []}
+
+  defp move(state, to) when to < 0, do: {state, []}
+
+  defp move(state, to) do
+    if to > length(state.statements) - 1 do
+      {state, []}
+    else
+      # The selection follows the statement, not the row. Moving something and
+      # then finding the next click acts on its neighbour is how a wrong
+      # statement gets deleted.
+      {%{state | statement: to}, [{:program, {:move, state.selected, state.statement, to}}, :refresh]}
+    end
+  end
+
+  # ── Dialogs ───────────────────────────────────────────────────────────────
+
+  @doc "A dialog came back."
+  @spec dialog(t(), atom(), term()) :: {t(), [effect()]}
+  def dialog(state, _id, :cancel), do: {%{state | pending_kind: nil}, []}
+
+  def dialog(state, :program_new, {:ok, %{"name" => name}}) do
+    case String.trim(to_string(name)) do
+      "" -> {%{state | status: "A program needs a name"}, []}
+      name -> {%{state | selected: name}, [{:program, {:create, name}}, :refresh]}
+    end
+  end
+
+  def dialog(state, :program_kind, {:ok, values}) do
+    case kind_at(state, values["kind"]) do
+      nil ->
+        {state, []}
+
+      kind ->
+        {%{state | pending_kind: kind["name"]},
+         [{:dialog, :program_args, title: kind["label"] || kind["name"], fields: arg_fields(state, kind)}]}
+    end
+  end
+
+  def dialog(%{pending_kind: nil} = state, :program_args, _values), do: {state, []}
+
+  def dialog(state, :program_args, {:ok, values}) do
+    kind = Enum.find(state.kinds, &(&1["name"] == state.pending_kind))
+    args = collect_args(kind, values)
+
+    {%{state | pending_kind: nil},
+     [{:program, {:append, state.selected, state.pending_kind, args}}, :refresh]}
+  end
+
+  def dialog(state, _id, _result), do: {state, []}
+
+  # A choice field hands back an index; a text field hands back a string.
+  defp kind_at(state, index) when is_integer(index), do: Enum.at(state.kinds, index)
+
+  defp kind_at(state, name) when is_binary(name) do
+    Enum.find(state.kinds, &((&1["label"] || &1["name"]) == name)) ||
+      Enum.find(state.kinds, &(&1["name"] == name))
+  end
+
+  defp kind_at(_state, _other), do: nil
+
+  # Fields built from the kind's own declared parameters. A point gets a choice
+  # of taught points, because typing the name of a thing that already exists is
+  # a spelling test nobody should have to pass. Everything else is text, and
+  # `program.validate` is what explains a wrong one — it can name the socket,
+  # which a refusal cannot.
+  defp arg_fields(state, kind) do
+    for param <- kind["params"] || [] do
+      label = label_for(param)
+
+      case param["type"] do
+        "point" ->
+          names = Enum.map(state.points, & &1["name"])
+          {String.to_atom(param["name"]), :choice, label: label, choices: names, selected: 0}
+
+        "boolean" ->
+          {String.to_atom(param["name"]), :choice, label: label, choices: ["false", "true"],
+           selected: 0}
+
+        _ ->
+          {String.to_atom(param["name"]), :text, label: label, value: default_text(param)}
+      end
+    end
+  end
+
+  defp label_for(param) do
+    base = param["name"] |> to_string() |> String.replace("_", " ") |> String.capitalize()
+    if param["required"], do: base, else: base <> " (optional)"
+  end
+
+  defp default_text(%{"default" => nil}), do: ""
+  defp default_text(%{"default" => value}), do: to_string(value)
+  defp default_text(_param), do: ""
+
+  # Empty optional fields are dropped rather than sent as "". A socket the user
+  # left alone is one the controller should fill with its own default, and ""
+  # is a value that means something different from absent.
+  defp collect_args(nil, _values), do: []
+
+  defp collect_args(kind, values) do
+    for param <- kind["params"] || [],
+        raw = resolve(param, values[param["name"]]),
+        raw not in [nil, ""] do
+      %{"name" => param["name"], "value" => raw}
+    end
+  end
+
+  defp resolve(_param, nil), do: nil
+  defp resolve(_param, value) when is_binary(value), do: String.trim(value)
+  defp resolve(_param, value), do: value
+
+  # ── Results the shell feeds back ──────────────────────────────────────────
+
+  @doc "The program library, freshly read."
+  @spec loaded(t(), [map()]) :: t()
+  def loaded(%__MODULE__{} = state, programs) do
+    selected = if Enum.any?(programs, &(&1["name"] == state.selected)), do: state.selected
+    %{state | programs: programs, selected: selected}
+  end
+
+  @doc "The selected program's statements, freshly read."
+  @spec shown(t(), [map()]) :: t()
+  def shown(%__MODULE__{} = state, statements) do
+    statement = if Enum.any?(statements, &(&1["seq"] == state.statement)), do: state.statement
+    %{state | statements: statements, statement: statement}
+  end
+
+  @doc "The palette, read once per connection."
+  @spec kinds_loaded(t(), [map()]) :: t()
+  def kinds_loaded(%__MODULE__{} = state, kinds), do: %{state | kinds: kinds}
+
+  @doc "Taught points, for the point choices in the argument dialog."
+  @spec points_loaded(t(), [map()]) :: t()
+  def points_loaded(%__MODULE__{} = state, points), do: %{state | points: points}
+
+  @doc "The run's own account of itself."
+  @spec ran(t(), map()) :: t()
+  def ran(%__MODULE__{} = state, run) do
+    %{state | run: run, status: describe_run(run)}
+  end
+
+  @doc "Something was refused. The controller's own words, not ours."
+  @spec failed(t(), term()) :: t()
+  def failed(%__MODULE__{} = state, reason), do: %{state | status: describe(reason)}
+
+  @doc "A controller arrived."
+  @spec connected(t()) :: t()
+  def connected(%__MODULE__{} = state) do
+    %{state | connected?: true, status: "Connected"}
+  end
+
+  @doc "It went away. What was on screen is now stale, and saying so is the job."
+  @spec disconnected(t()) :: t()
+  def disconnected(%__MODULE__{} = state) do
+    %{state | connected?: false, programs: [], statements: [], kinds: [], points: [],
+              selected: nil, statement: nil, run: %{}, status: "Not connected"}
+  end
+
+  defp describe_run(run) do
+    name = run[:name] || run["name"]
+    state = run[:state] || run["state"]
+    at = run[:statement] || run["statement"]
+    total = run[:statements] || run["statements"]
+    reason = run[:reason] || run["reason"] || ""
+
+    cond do
+      name in [nil, ""] -> "No program loaded"
+      reason != "" -> "#{name}: #{state} at #{at}/#{total} — #{reason}"
+      true -> "#{name}: #{state} at #{at}/#{total}"
+    end
+  end
+
+  defp describe(%{"message" => message, "data" => data}) when is_map(data) and data != %{} do
+    detail = data |> Enum.map(fn {k, v} -> "#{k}=#{inspect(v)}" end) |> Enum.join(", ")
+    "#{message} (#{detail})"
+  end
+
+  defp describe(%{"message" => message}), do: message
+  defp describe({:unexpected_result, key, _got}), do: "Controller sent no #{key}"
+  defp describe(:disconnected), do: "Not connected"
+  defp describe(reason), do: inspect(reason)
+end

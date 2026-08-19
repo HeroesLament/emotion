@@ -27,7 +27,8 @@ defmodule EMotion.Shell do
   use Cedar.Scene
 
   alias Cedar.Camera
-  alias EMotion.{Boot, Cell, Controllers, Jog, Link, Navigator, Pendant, Scene, Workbench}
+  alias EMotion.{Boot, Cell, Controllers, Jog, Link, Navigator, Pendant, Program, Programs, Scene,
+                 Teach, Workbench}
   alias EMotion.Workbench.Registry
 
   require Logger
@@ -57,6 +58,7 @@ defmodule EMotion.Shell do
       workbench: workbench,
       workbench_state: init_workbench(workbench, cell),
       controllers: Controllers.new(),
+      programs: Programs.new(),
       pendant: Pendant.new(cell),
       status: "Starting…"
     }
@@ -96,9 +98,29 @@ defmodule EMotion.Shell do
 
   def handle_info({:jog, _state}, model), do: {:noreply, model}
 
-  def handle_info({:link, {:disconnected, reason}}, model) do
-    {:noreply, %{model | controllers: Controllers.disconnected(model.controllers, reason)}}
+  def handle_info(:program_poll, model) do
+    was_active = Programs.active?(model.programs)
+    model = poll_program(model)
+
+    # A run that has just finished leaves the statement list showing a marker
+    # that is no longer true, so the last poll of a run refreshes the display.
+    model = if was_active and not Programs.active?(model.programs), do: refresh_programs(model), else: model
+    {:noreply, model}
   end
+
+  def handle_info({:link, {:disconnected, reason}}, model) do
+    # Both tabs care. What the Programs tab is showing became stale the moment
+    # the socket did, and a list of programs from a controller that is no
+    # longer there is the most confident kind of wrong.
+    {:noreply,
+     %{
+       model
+       | controllers: Controllers.disconnected(model.controllers, reason),
+         programs: Programs.disconnected(model.programs)
+     }}
+  end
+
+  def handle_info({:link, :connected}, model), do: {:noreply, load_program_catalog(model)}
 
   def handle_info({:link, _event}, model), do: {:noreply, model}
 
@@ -149,6 +171,12 @@ defmodule EMotion.Shell do
     end
   end
 
+  def handle_event({:dialog_result, id, result}, model)
+      when id in [:program_new, :program_kind, :program_args] do
+    {state, effects} = Programs.dialog(model.programs, id, result)
+    run_program_effects(%{model | programs: state}, effects)
+  end
+
   def handle_event({:dialog_result, id, result}, model) do
     {state, effects} = Controllers.dialog(model.controllers, id, result)
     run_effects(%{model | controllers: state}, effects)
@@ -162,6 +190,33 @@ defmodule EMotion.Shell do
     model
     |> Map.put(:controllers, Controllers.select(model.controllers, index))
     |> controller_action(:connect)
+  end
+
+  def handle_event({:ui_event, :prg_list, :change, index}, model) do
+    {state, effects} = Programs.select(model.programs, index)
+    run_program_effects(%{model | programs: state}, effects)
+  end
+
+  def handle_event({:ui_event, :prg_statements, :change, index}, model) do
+    %{model | programs: Programs.select_statement(model.programs, index)}
+  end
+
+  for {id, action} <- [
+        prg_new: :new,
+        prg_delete: :delete,
+        prg_refresh: :refresh,
+        prg_append: :append,
+        prg_remove: :remove,
+        prg_up: :up,
+        prg_down: :down,
+        prg_start: :start,
+        prg_hold: :hold,
+        prg_resume: :resume,
+        prg_step: :step,
+        prg_stop: :stop
+      ] do
+    def handle_event({:ui_event, unquote(id), :click}, model),
+      do: program_action(model, unquote(action))
   end
 
   def handle_event({:ui_event, :ctl_add, :click}, model), do: controller_action(model, :add)
@@ -209,6 +264,95 @@ defmodule EMotion.Shell do
   end
 
   def handle_event(_event, model), do: model
+
+  # Programs, like Controllers, returns effects rather than performing them.
+  #
+  # These run inline rather than through `EMotion.Job`. A program call is a
+  # request on a socket the studio already holds open and answers in under a
+  # millisecond on a bench; putting it on a task would mean rendering a tab
+  # that shows the state before the edit, which is the one thing this tab must
+  # never do. If a controller over a slow link ever makes that false, the fix
+  # is a pending flag in the state, not a background task with no flag.
+  defp program_action(model, action) do
+    {state, effects} = Programs.action(model.programs, action)
+    run_program_effects(%{model | programs: state}, effects)
+  end
+
+  defp run_program_effects(model, effects), do: Enum.reduce(effects, model, &run_program_effect/2)
+
+  defp run_program_effect({:dialog, id, opts}, model) do
+    Cedar.Renderer.render({:show_dialog, id, :form, :main, opts})
+    model
+  end
+
+  defp run_program_effect({:program, call}, model) do
+    case perform(call) do
+      {:ok, _result} -> poll_program(model)
+      {:error, reason} -> %{model | programs: Programs.failed(model.programs, reason)}
+    end
+  end
+
+  defp run_program_effect(:refresh, model), do: refresh_programs(model)
+
+  defp perform({:create, name}), do: Program.create(name)
+  defp perform({:delete, name}), do: Program.delete(name)
+  defp perform({:append, program, kind, args}), do: Program.append(program, kind, args)
+  defp perform({:remove, program, seq}), do: Program.remove(program, seq)
+  defp perform({:move, program, seq, to}), do: Program.move(program, seq, to)
+  defp perform({:start, name}), do: Program.start(name)
+  defp perform({:hold}), do: Program.hold()
+  defp perform({:resume}), do: Program.resume()
+  defp perform({:step}), do: Program.step()
+  defp perform({:stop}), do: Program.stop()
+
+  # Read everything the tab shows, in the order it depends on itself: the
+  # library, then the statements of whatever survived in it.
+  defp refresh_programs(model) do
+    state =
+      model.programs
+      |> ingest(&Program.list/0, &Programs.loaded/2)
+      |> then(fn state ->
+        if state.selected,
+          do: ingest(state, fn -> Program.show(state.selected) end, &Programs.shown/2),
+          else: %{state | statements: [], statement: nil}
+      end)
+
+    poll_program(%{model | programs: state})
+  end
+
+  # The palette and the taught points change rarely and are read once per
+  # connection rather than per refresh — a point list is the same shape as a
+  # program list and would double the traffic of every edit for nothing.
+  defp load_program_catalog(model) do
+    state =
+      model.programs
+      |> Programs.connected()
+      |> ingest(&Program.kinds/0, &Programs.kinds_loaded/2)
+      |> ingest(&Teach.list_points/0, &Programs.points_loaded/2)
+
+    refresh_programs(%{model | programs: state})
+  end
+
+  defp ingest(state, read, apply_fun) do
+    case read.() do
+      {:ok, value} -> apply_fun.(state, value)
+      {:error, reason} -> Programs.failed(state, reason)
+    end
+  end
+
+  # Polling, and only while there is something to poll. A studio that asks a
+  # controller what it is doing twice a second forever is a studio that shows
+  # up in someone's bus trace as the reason a cycle is late.
+  defp poll_program(model) do
+    state =
+      case Program.status() do
+        {:ok, run} -> Programs.ran(model.programs, run)
+        {:error, _reason} -> model.programs
+      end
+
+    if Programs.active?(state), do: Process.send_after(self(), :program_poll, 250)
+    %{model | programs: state}
+  end
 
   # Controllers returns effects rather than performing them, so this is the one
   # place the tab touches the world.
@@ -324,7 +468,7 @@ defmodule EMotion.Shell do
            ]},
           {:spacer, 8}
         ]}}
-    ] ++ controllers_tab(model) ++ [
+    ] ++ programs_tab(model) ++ controllers_tab(model) ++ [
 
       # -- docking --------------------------------------------------------
       # The viewport is the centre pane, which is the one pane that cannot
@@ -468,6 +612,80 @@ defmodule EMotion.Shell do
   defp refusal(reason), do: inspect(reason)
 
   # ==========================================================================
+
+  # Between View and Controllers, which is where it belongs in the order of a
+  # session: choose what you are looking at, write what it should do, then
+  # decide which machine does it.
+  defp programs_tab(model) do
+    state = model.programs
+    enabled = Programs.enabled(state)
+    programs = Programs.labels(state)
+    statements = Programs.statement_labels(state)
+
+    [
+      {:ensure_panel, :tab_programs, :ribbon, label: "Programs"},
+      {:ensure_widget, :prg_list, :list_box, :tab_programs, choices: programs},
+      {:set, :prg_list, items: programs},
+      {:set, :prg_list, selected: Programs.selected_index(state)},
+      {:ensure_widget, :prg_statements, :list_box, :tab_programs, choices: statements},
+      {:set, :prg_statements, items: statements},
+      {:set, :prg_statements, selected: Programs.statement_index(state)},
+
+      {:ensure_widget, :prg_new, :button, :tab_programs, label: "New…"},
+      {:ensure_widget, :prg_delete, :button, :tab_programs, label: "Delete"},
+      {:ensure_widget, :prg_refresh, :button, :tab_programs, label: "Refresh"},
+      {:ensure_widget, :prg_append, :button, :tab_programs, label: "Add…"},
+      {:ensure_widget, :prg_remove, :button, :tab_programs, label: "Remove"},
+      {:ensure_widget, :prg_up, :button, :tab_programs, label: "Up"},
+      {:ensure_widget, :prg_down, :button, :tab_programs, label: "Down"},
+      {:ensure_widget, :prg_start, :button, :tab_programs, label: "Start"},
+      {:ensure_widget, :prg_hold, :button, :tab_programs, label: "Hold"},
+      {:ensure_widget, :prg_resume, :button, :tab_programs, label: "Resume"},
+      {:ensure_widget, :prg_step, :button, :tab_programs, label: "Step"},
+      {:ensure_widget, :prg_stop, :button, :tab_programs, label: "Stop"},
+      {:ensure_widget, :prg_status, :static_text, :tab_programs, label: state.status},
+      {:set, :prg_status, label: state.status},
+
+      {:set, :prg_new, enabled: enabled.new},
+      {:set, :prg_delete, enabled: enabled.delete},
+      {:set, :prg_refresh, enabled: enabled.refresh},
+      {:set, :prg_append, enabled: enabled.append},
+      {:set, :prg_remove, enabled: enabled.remove},
+      {:set, :prg_up, enabled: enabled.up},
+      {:set, :prg_down, enabled: enabled.down},
+      {:set, :prg_start, enabled: enabled.start},
+      {:set, :prg_hold, enabled: enabled.hold},
+      {:set, :prg_resume, enabled: enabled.resume},
+      {:set, :prg_step, enabled: enabled.step},
+      {:set, :prg_stop, enabled: enabled.stop},
+
+      {:layout, :tab_programs,
+       {:vbox, [padding: 10],
+        [
+          {:hbox, [proportion: 1],
+           [
+             {:prg_list, proportion: 2, flag: :expand},
+             {:spacer, 10},
+             {:prg_statements, proportion: 3, flag: :expand},
+             {:spacer, 12},
+             {:vbox, [],
+              [
+                {:hbox, [], [:prg_new, {:spacer, 6}, :prg_delete, {:spacer, 6}, :prg_refresh]},
+                {:spacer, 8},
+                {:hbox, [],
+                 [:prg_append, {:spacer, 6}, :prg_remove, {:spacer, 6}, :prg_up, {:spacer, 6},
+                  :prg_down]},
+                {:spacer, 8},
+                {:hbox, [],
+                 [:prg_start, {:spacer, 6}, :prg_hold, {:spacer, 6}, :prg_resume, {:spacer, 6},
+                  :prg_step, {:spacer, 6}, :prg_stop]}
+              ]}
+           ]},
+          {:spacer, 6},
+          :prg_status
+        ]}}
+    ]
+  end
 
   defp controllers_tab(model) do
     state = model.controllers
