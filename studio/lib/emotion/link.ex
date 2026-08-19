@@ -127,6 +127,28 @@ defmodule EMotion.Link do
     GenServer.call(server(opts), {:hold, to_string(axis), radians_per_second * 1.0}, 10_000)
   end
 
+  @doc """
+  Calls a method node, returning its result map.
+
+  The generic primitive, because the controller's method surface is discovered
+  rather than compiled in: a build that grows a method should be reachable from
+  a studio that predates it. `EMotion.Program` and `EMotion.Teach` are the named
+  vocabularies over this, and are what application code should normally use.
+
+  Errors come back as the controller's own error map, `%{"code" => _, "message"
+  => _}`, and are not translated. A refusal is information — "refused: mode
+  selector is in manual" is worth showing an operator verbatim, and a client
+  that maps it to `:error` has thrown away the only useful part.
+
+  The timeout is generous because a method may be a motion. `program.start` is
+  declared async and returns on acceptance, but `cell.teach_point` writes to a
+  database and `cell.master_axis` waits on a drive.
+  """
+  @spec call(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def call(node_id, arguments \\ %{}, opts \\ []) do
+    GenServer.call(server(opts), {:call, node_id, arguments}, 30_000)
+  end
+
   @doc "Reads node values, as a map of node id to value."
   @spec read([String.t()], keyword()) :: {:ok, map()} | {:error, term()}
   def read(node_ids, opts \\ []) do
@@ -190,6 +212,10 @@ defmodule EMotion.Link do
     {:reply, :ok, %{state | subscribers: MapSet.put(state.subscribers, pid)}}
   end
 
+  def handle_call({:call, _node_id, _arguments}, _from, %{session: nil} = state) do
+    {:reply, {:error, :disconnected}, state}
+  end
+
   def handle_call({op, _axis, _value}, _from, %{session: nil} = state)
       when op in [:move_to, :hold] do
     {:reply, {:error, :not_connected}, state}
@@ -213,6 +239,32 @@ defmodule EMotion.Link do
         {:reply, {:ok, deadline}, %{state | session: session}}
 
       {:ok, session, %{"error" => error}} ->
+        {:reply, {:error, error}, %{state | session: session}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, close(state, reason)}
+    end
+  end
+
+  def handle_call({:call, node_id, arguments}, _from, state) do
+    case ExLink.request(state.session, "nodes/call", %{
+           "nodeId" => node_id,
+           "arguments" => arguments
+         }) do
+      # The envelope carries acceptance; the method's own result is inside it.
+      # Unwrapped here so callers never write result["result"], and so that
+      # "accepted but did nothing" cannot be mistaken for a value.
+      {:ok, session, %{"result" => %{"accepted" => true} = envelope}} ->
+        {:reply, {:ok, Map.get(envelope, "result") || %{}}, %{state | session: session}}
+
+      {:ok, session, %{"result" => %{"accepted" => false} = envelope}} ->
+        {:reply, {:error, envelope}, %{state | session: session}}
+
+      {:ok, session, %{"result" => result}} ->
+        {:reply, {:ok, result}, %{state | session: session}}
+
+      {:ok, session, %{"error" => error}} ->
+        # A refusal is not a broken link. The session stays up.
         {:reply, {:error, error}, %{state | session: session}}
 
       {:error, reason} ->
