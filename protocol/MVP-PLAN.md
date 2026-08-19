@@ -90,6 +90,14 @@ Also fixed: node id and bitrate live in the drive's IDENT page, a fresh board
 parks at `0xFF` (CiA 305 unconfigured) and answers only LSS, and serials are
 derived from the MCU UID so Fastscan can separate them.
 
+> **Superseded in part by `protocol/FIELDBUS.md`.** The topology is decided:
+> separate CAN networks per joint group, J1&ndash;J3 and J4&ndash;J6. Three axes a bus
+> turns the budget below from impossible into comfortable (500 Hz at ~49 % a
+> bus at 1 Mbit/s), and it moves the cyclic engine onto the metronome, because
+> two buses have two SYNCs and two SYNCs are two time bases. Read that document
+> first; the single-bus arithmetic here is kept because it is how the
+> conclusion was reached.
+
 ### The finding that decides the architecture
 
 An SDO round trip is ~1 ms on that bench, so setpoints must be PDOs. Fine. But
