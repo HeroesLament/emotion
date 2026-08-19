@@ -110,6 +110,59 @@ defmodule ExMo.Schema.Registry do
           }
         ]
       },
+      "type.statement_kind" => %StructType{
+        id: "type.statement_kind",
+        name: "StatementKind",
+        description:
+          "One statement kind and its sockets. `motion` is not decoration: it " <>
+            "is what the executor reads to decide whether a statement may be " <>
+            "queued ahead of the arm or has to wait for it, so an editor can " <>
+            "show which lines blend and which are barriers.",
+        fields: [
+          %ResultField{name: "name", type: :string, description: "Its name, as stored"},
+          %ResultField{name: "label", type: :string, description: "For a human"},
+          %ResultField{name: "description", type: :string, description: "What it does"},
+          %ResultField{name: "motion", type: :boolean, description: "Whether it moves the arm"},
+          %ResultField{
+            name: "params",
+            type: {:array, {:ref, "type.statement_param"}},
+            description: "Its sockets, in order"
+          }
+        ]
+      },
+      "type.statement_param" => %StructType{
+        id: "type.statement_param",
+        name: "StatementParam",
+        description:
+          "One socket of a statement kind. `type` carries physical dimension " <>
+            "rather than storage width — `velocity`, `length`, `angle`, " <>
+            "`duration` are not `number` with a comment — and `point`, `frame`, " <>
+            "`tool`, `program` are the types that become references rather than " <>
+            "values.",
+        fields: [
+          %ResultField{name: "name", type: :string, description: "The socket name"},
+          %ResultField{name: "type", type: :string, description: "Its declared type"},
+          %ResultField{name: "required", type: :boolean, description: "Whether it must be given"},
+          %ResultField{name: "default", type: :string, description: "Its default, rendered, or empty"},
+          %ResultField{name: "description", type: :string, description: "What it means"}
+        ]
+      },
+      "type.statement_arg" => %StructType{
+        id: "type.statement_arg",
+        name: "StatementArgument",
+        description:
+          "One argument to a statement: the socket it fills, and its value as " <>
+            "text. Values travel as text because that is what a form field " <>
+            "produces; what each one MEANS is declared by the statement kind, " <>
+            "so a `:velocity` socket parses its value as a speed and a " <>
+            "`:point` socket keeps it as the name of a taught point. The " <>
+            "conversion is driven by the declared type, never guessed from the " <>
+            "string \u2014 a point legitimately named \"12\" must not become a number.",
+        fields: [
+          %ResultField{name: "name", type: :string, description: "The socket, e.g. \"point\""},
+          %ResultField{name: "value", type: :string, description: "Its value, as text"}
+        ]
+      },
       "type.stored_point" => %StructType{
         id: "type.stored_point",
         name: "StoredPoint",
@@ -566,7 +619,230 @@ defmodule ExMo.Schema.Registry do
         program_step(),
         program_stop(),
         program_list(),
-        program_show()
+        program_show(),
+        program_create(),
+        program_delete(),
+        program_append(),
+        program_replace(),
+        program_remove(),
+        program_move(),
+        program_kinds(),
+        program_validate()
+      ]
+    }
+  end
+
+  # ── Editing a program over the wire ───────────────────────────────────────
+  #
+  # Statement at a time, not whole-body, and that is the recorded decision
+  # rather than a shortcut. `protocol/README.md`: "Bulk transfer — program
+  # source, logs, motion traces — is not on this link. It is plain HTTP on the
+  # same host so it stays curl-able and does not compete with live telemetry."
+  # A thousand-statement body does not belong in a frame competing with a 30 Hz
+  # position stream; a single edit made by a person with an editor open does.
+  #
+  # Every one of these refuses while that program is running. The danger is not
+  # the engine reading a changed body — `ExProto.Program.Run` captures the body
+  # at start deliberately — it is the operator believing the thing they just
+  # edited is the thing that ran.
+  #
+  # All are guarded by `edit_program`, which already exists and is already
+  # distinct from `load_program` (choose what runs) and `execute_program`
+  # (start it). Someone may be allowed to run a cell's programs without being
+  # allowed to change them, which is the usual arrangement.
+
+  # An editor cannot offer sockets it does not know about, and nothing exposed
+  # the kind registry over the wire until this. `program.kind` is the kind of
+  # the statement currently EXECUTING, which is a different question.
+  defp program_kinds do
+    %Method{
+      id: "program.kinds",
+      name: "StatementKinds",
+      description:
+        "Every statement kind this build knows, with its sockets. This is what " <>
+          "a block editor is built from: a socket that declares `:point` can " <>
+          "offer the taught points and refuse everything else, one that " <>
+          "declares `:velocity` can offer units.\n\n" <>
+          "It is a method rather than a static document because the registry is " <>
+          "populated by compiled extensions — a controller with an extension " <>
+          "loaded knows kinds this one does not, and an editor that hardcoded " <>
+          "the list would silently refuse them.",
+      async: false,
+      call_grant: :read_state,
+      output_args: [
+        %ResultField{
+          name: "kinds",
+          type: {:array, {:ref, "type.statement_kind"}},
+          description: "Every kind, with its sockets"
+        }
+      ]
+    }
+  end
+
+  # Separate from `program.append` on purpose, and the split is the one the
+  # error channel forces: `ExProto.Source`'s vocabulary is a fixed set of
+  # atoms, so a refusal cannot carry which socket was wrong. An editor told
+  # only "rejected" cannot put the cursor anywhere.
+  #
+  # So asking is a QUERY that succeeds and describes, and doing is a COMMAND
+  # that succeeds or is refused. Which is also how an editor really behaves:
+  # validate as somebody types, commit when they stop.
+  defp program_validate do
+    %Method{
+      id: "program.validate",
+      name: "ValidateStatement",
+      description:
+        "Would this statement be accepted? Answers without storing anything, " <>
+          "naming the socket that fails and why.\n\n" <>
+          "`ok` false with an empty `socket` means the kind itself is unknown. " <>
+          "A socket named with a reason means that argument: a missing " <>
+          "required value, a value that is not a number, a point that does not " <>
+          "exist, or a socket this kind does not declare.",
+      async: false,
+      call_grant: :read_state,
+      input_args: [
+        %Argument{name: "kind", type: :string, required: true, description: "The statement kind"},
+        %Argument{
+          name: "args",
+          type: {:array, {:ref, "type.statement_arg"}},
+          required: false,
+          description: "The arguments to check"
+        }
+      ],
+      output_args: [
+        %ResultField{name: "ok", type: :boolean, description: "Whether it would be accepted"},
+        %ResultField{name: "socket", type: :string, description: "Which argument failed, or empty"},
+        %ResultField{name: "reason", type: :string, description: "Why, in words, or empty"}
+      ]
+    }
+  end
+
+  defp program_create do
+    %Method{
+      id: "program.create",
+      name: "CreateProgram",
+      description:
+        "Creates an empty program. Names are unique, so this refuses rather " <>
+          "than silently adopting an existing one — an editor that thinks it " <>
+          "made a new program and is in fact appending to an old one is the " <>
+          "worst version of this call.",
+      async: false,
+      call_grant: :edit_program,
+      input_args: [
+        %Argument{name: "name", type: :string, required: true, description: "The new program"}
+      ]
+    }
+  end
+
+  defp program_delete do
+    %Method{
+      id: "program.delete",
+      name: "DeleteProgram",
+      description:
+        "Deletes a program and its statements. Refused while it is running. " <>
+          "Points, frames and tools it referenced are untouched — the " <>
+          "references were what protected THEM from deletion, not the other " <>
+          "way round.",
+      async: false,
+      call_grant: :edit_program,
+      input_args: [
+        %Argument{name: "name", type: :string, required: true, description: "The program"}
+      ]
+    }
+  end
+
+  defp program_append do
+    %Method{
+      id: "program.append",
+      name: "AppendStatement",
+      description:
+        "Adds a statement to the end of a program.\n\n" <>
+          "Validated when it is stored, not when it is reached: an unknown " <>
+          "kind, a missing required argument, a socket the kind does not " <>
+          "declare, or a point that does not exist are all refused here, while " <>
+          "somebody is editing, rather than at the moment the arm is already " <>
+          "moving. That is the entire return on typed parameters.\n\n" <>
+          "References travel as names — `point: \"weld_start\"` — because that " <>
+          "is what a person taught. The controller stores a foreign key, which " <>
+          "is what refuses the point's deletion later.",
+      async: false,
+      call_grant: :edit_program,
+      input_args: [
+        %Argument{name: "program", type: :string, required: true, description: "The program"},
+        %Argument{
+          name: "kind",
+          type: :string,
+          required: true,
+          description: "A statement kind this build knows; see `program.kinds`"
+        },
+        %Argument{
+          name: "args",
+          type: {:array, {:ref, "type.statement_arg"}},
+          required: false,
+          description: "Its arguments, by socket name"
+        }
+      ],
+      output_args: [
+        %ResultField{name: "seq", type: :int32, description: "Where it landed, from zero"}
+      ]
+    }
+  end
+
+  defp program_replace do
+    %Method{
+      id: "program.replace",
+      name: "ReplaceStatement",
+      description:
+        "Replaces the statement at `seq`, keeping its place. The new kind and " <>
+          "arguments are validated exactly as an append's are; the old " <>
+          "statement's references are discarded and the new ones resolved.",
+      async: false,
+      call_grant: :edit_program,
+      input_args: [
+        %Argument{name: "program", type: :string, required: true, description: "The program"},
+        %Argument{name: "seq", type: :int32, required: true, description: "Which statement"},
+        %Argument{name: "kind", type: :string, required: true, description: "The new kind"},
+        %Argument{
+          name: "args",
+          type: {:array, {:ref, "type.statement_arg"}},
+          required: false,
+          description: "Its arguments, by socket name"
+        }
+      ]
+    }
+  end
+
+  defp program_remove do
+    %Method{
+      id: "program.remove",
+      name: "RemoveStatement",
+      description:
+        "Removes the statement at `seq`. Everything below it slides up, so " <>
+          "sequence numbers stay contiguous and an editor never has to render " <>
+          "a hole.",
+      async: false,
+      call_grant: :edit_program,
+      input_args: [
+        %Argument{name: "program", type: :string, required: true, description: "The program"},
+        %Argument{name: "seq", type: :int32, required: true, description: "Which statement"}
+      ]
+    }
+  end
+
+  defp program_move do
+    %Method{
+      id: "program.move",
+      name: "MoveStatement",
+      description:
+        "Moves the statement at `seq` to position `to`, sliding the rest " <>
+          "along. Reordering is an edit like any other and is refused while " <>
+          "the program is running.",
+      async: false,
+      call_grant: :edit_program,
+      input_args: [
+        %Argument{name: "program", type: :string, required: true, description: "The program"},
+        %Argument{name: "seq", type: :int32, required: true, description: "Which statement"},
+        %Argument{name: "to", type: :int32, required: true, description: "Its new place"}
       ]
     }
   end

@@ -302,7 +302,6 @@ defmodule ExMove.CartesianStream do
   end
 
   @doc """
-  Stop the stream for `arm`, commanding zero on the way out.  @doc \"""
   Stop the stream for `arm`, commanding zero on the way out.
 
   The explicit zero is what makes a released button feel attached to the machine.
@@ -316,6 +315,13 @@ defmodule ExMove.CartesianStream do
       nil -> :ok
       pid -> GenServer.stop(pid, :normal)
     end
+  catch
+    # The other half of `whereis/1`'s race, and it is a real one rather than
+    # belt and braces: a stream can die between the liveness check and the stop
+    # — a program run ending takes its stream with it — and a caller releasing
+    # something that has already gone wanted it gone. Raising here turns
+    # ordinary cleanup into a failure with nothing wrong.
+    :exit, _reason -> :ok
   end
 
   @doc "Advance an `:external`-clocked stream by `dt` seconds. Tests only."

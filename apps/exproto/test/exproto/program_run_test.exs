@@ -294,6 +294,67 @@ defmodule ExProto.Program.RunTest do
     end
   end
 
+  describe "editing while it runs" do
+    test "an edit to the running program is refused", %{tag: tag} do
+      # The danger is not the engine reading a changed body — Run captures it at
+      # start deliberately — it is the operator believing the thing they just
+      # edited is the thing that ran.
+      teach("a_t#{tag}", 0.05)
+      program_with(tag, [{"wait", %{"seconds" => 5.0}}])
+
+      :ok = Run.start("prog_t#{tag}", RunTestRun)
+      wait_until(fn -> Run.status(RunTestRun).state == :running end)
+
+      assert {:error, :rejected} =
+               ExProto.Source.Program.call(
+                 "program.append",
+                 %{
+                   "program" => "prog_t#{tag}",
+                   "kind" => "wait",
+                   "args" => [%{"name" => "seconds", "value" => "1.0"}]
+                 },
+                 mode: RunTestMode,
+                 run: RunTestRun
+               )
+
+      assert {:error, :rejected} =
+               ExProto.Source.Program.call("program.delete", %{"name" => "prog_t#{tag}"},
+                 mode: RunTestMode,
+                 run: RunTestRun
+               )
+
+      :ok = Run.stop_run(RunTestRun)
+    end
+
+    test "a different program may be edited while one runs", %{tag: tag} do
+      # The refusal is about the program that is running, not about the
+      # controller being busy. An operator preparing the next job is normal.
+      teach("a_t#{tag}", 0.05)
+      program_with(tag, [{"wait", %{"seconds" => 5.0}}])
+
+      :ok = Run.start("prog_t#{tag}", RunTestRun)
+      wait_until(fn -> Run.status(RunTestRun).state == :running end)
+
+      other = "other_t#{tag}"
+      arg = [mode: RunTestMode, run: RunTestRun]
+
+      assert :ok = ExProto.Source.Program.call("program.create", %{"name" => other}, arg)
+
+      assert {:ok, %{"seq" => 0}} =
+               ExProto.Source.Program.call(
+                 "program.append",
+                 %{
+                   "program" => other,
+                   "kind" => "wait",
+                   "args" => [%{"name" => "seconds", "value" => "1.0"}]
+                 },
+                 arg
+               )
+
+      :ok = Run.stop_run(RunTestRun)
+    end
+  end
+
   describe "holding" do
     test "stops the arm and resumes on the same statement", %{tag: tag} do
       # Short. The claim is about holding and resuming, not about travel, and
