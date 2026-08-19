@@ -1,4 +1,4 @@
-# ExMo Information Model — Machine Examples
+# E-Motion Information Model — Machine Examples
 
 This document shows what controller definitions and their projected Information Model address spaces look like for three representative machines. The point is to show that the same handful of primitives — `axis`, `behaviors`, and behavior definitions — scale cleanly from the simplest single-axis machine to a full 6-DOF arm with manipulator channels.
 
@@ -14,15 +14,15 @@ The simplest case: one linear axis and one rotary axis.
 
 ```elixir
 defmodule MiniLathe do
-  use ExMo.Controller
+  use EMotion.Controller
 
   axis :z,       type: :linear, unit: :mm,  limits: {-300.0, 0.0}, home_pos: 0.0
   axis :spindle, type: :rotary, unit: :rpm,  limits: {0.0, 3000.0}
 
   behaviors [
-    ExMo.Behaviors.MiniLathe.Home,
-    ExMo.Behaviors.MiniLathe.SetSpindleSpeed,
-    ExMo.Behaviors.MiniLathe.Threading
+    EMotion.Behaviors.MiniLathe.Home,
+    EMotion.Behaviors.MiniLathe.SetSpindleSpeed,
+    EMotion.Behaviors.MiniLathe.Threading
   ]
 end
 ```
@@ -30,7 +30,7 @@ end
 ### Projected address space
 
 ```
-ExMo
+E-Motion
 ├── Axes
 │   ├── Z
 │   │   ├── Position          (float, mm,  read-only,  observable)
@@ -77,7 +77,7 @@ ExMo
     └── FaultPresent     (boolean)
 ```
 
-**Axis properties generated automatically** from the two `axis` declarations. Threading runtime fields come from the `ExMo.Behaviors.MiniLathe.Threading` definition. Total nodes: ~45.
+**Axis properties generated automatically** from the two `axis` declarations. Threading runtime fields come from the `EMotion.Behaviors.MiniLathe.Threading` definition. Total nodes: ~45.
 
 ---
 
@@ -89,7 +89,7 @@ Three linear axes, a spindle, and behaviors for homing, probing, and tool change
 
 ```elixir
 defmodule CNCMill do
-  use ExMo.Controller
+  use EMotion.Controller
 
   axis :x,       type: :linear, unit: :mm,  limits: {-500.0, 0.0}, home_pos: 0.0
   axis :y,       type: :linear, unit: :mm,  limits: {-400.0, 0.0}, home_pos: 0.0
@@ -97,9 +97,9 @@ defmodule CNCMill do
   axis :spindle, type: :rotary, unit: :rpm,  limits: {0.0, 24000.0}
 
   behaviors [
-    ExMo.Behaviors.CNCMill.HomeAll,
-    ExMo.Behaviors.CNCMill.ProbeWorkpiece,
-    ExMo.Behaviors.CNCMill.ToolChange
+    EMotion.Behaviors.CNCMill.HomeAll,
+    EMotion.Behaviors.CNCMill.ProbeWorkpiece,
+    EMotion.Behaviors.CNCMill.ToolChange
   ]
 end
 ```
@@ -107,7 +107,7 @@ end
 ### Projected address space
 
 ```
-ExMo
+E-Motion
 ├── Axes
 │   ├── X  (Position, TargetPosition, Velocity, DriveState, FaultCode, AtHome)
 │   ├── Y  (Position, TargetPosition, Velocity, DriveState, FaultCode, AtHome)
@@ -154,7 +154,7 @@ The `Load` property on the spindle uses the `:extra` escape hatch on the axis de
 ```elixir
 axis :spindle, type: :rotary, unit: :rpm, limits: {0.0, 24000.0},
   extra: [
-    %ExMo.Schema.Property{
+    %EMotion.Schema.Property{
       id: "spindle.load", name: "Load", type: :float,
       readable: true, writable: false, observable: true,
       description: "Spindle load (%)"
@@ -174,7 +174,7 @@ Six rotary joints, TCP pose observability, two manipulator channels, and motion 
 
 ```elixir
 defmodule ArctosSixDOF do
-  use ExMo.Controller
+  use EMotion.Controller
 
   axis :j1, type: :rotary, unit: :degrees, limits: {-170.0, 170.0}, home_pos: 0.0
   axis :j2, type: :rotary, unit: :degrees, limits: {-90.0,  90.0},  home_pos: 0.0
@@ -187,10 +187,10 @@ defmodule ArctosSixDOF do
   axis :tool_changer, type: :rotary, unit: :degrees, limits: {0.0, 360.0}
 
   behaviors [
-    ExMo.Behaviors.Arctos.HomeAll,
-    ExMo.Behaviors.Arctos.MoveTCP,
-    ExMo.Behaviors.Arctos.RunTrajectory,
-    ExMo.Behaviors.Arctos.Pick
+    EMotion.Behaviors.Arctos.HomeAll,
+    EMotion.Behaviors.Arctos.MoveTCP,
+    EMotion.Behaviors.Arctos.RunTrajectory,
+    EMotion.Behaviors.Arctos.Pick
   ]
 end
 ```
@@ -198,7 +198,7 @@ end
 ### Projected address space
 
 ```
-ExMo
+E-Motion
 ├── Axes
 │   ├── J1  (Position, TargetPosition, Velocity, DriveState, FaultCode, Direction)
 │   ├── J2  (…)

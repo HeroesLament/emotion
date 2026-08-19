@@ -153,7 +153,7 @@ defmodule EMotion.Controller.Profile do
   Forgets a stored token.
 
   Local only — it does not tell the controller, which keeps issuing it until
-  someone revokes it there. `mix exmo.account revoke` is the other half.
+  someone revokes it there. `mix emotion.account revoke` is the other half.
   """
   @spec drop_token(t() | String.t()) :: :ok
   def drop_token(profile) do

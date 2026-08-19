@@ -255,7 +255,7 @@ defmodule ExProto.DispatchTest do
     test "with no nodeId browses from the root", %{session: session} do
       result = result(call(ready(session), "nodes/browse"))
 
-      assert result["node"]["nodeId"] == "exmo"
+      assert result["node"]["nodeId"] == "emotion"
       assert Enum.any?(result["children"], &(&1["nodeId"] == "axes"))
     end
 

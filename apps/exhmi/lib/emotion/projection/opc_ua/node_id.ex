@@ -1,15 +1,15 @@
 defmodule EMotion.Projection.OPCUA.NodeId do
   @moduledoc """
-  Deterministic mapping from ExMo schema paths to OPC-UA string NodeIds.
+  Deterministic mapping from E-Motion schema paths to OPC-UA string NodeIds.
 
-  All ExMo nodes live in namespace 1 (ns=1).
+  All E-Motion nodes live in namespace 1 (ns=1).
   NodeIds are derived from the schema path list, joined with dots.
 
   Standard UA well-known nodes (Objects folder) use ns=0 numeric IDs.
 
   Examples:
-      path_to_node_id(["ExMo"])                           # => "ns=1;s=ExMo"
-      path_to_node_id(["ExMo", "Behaviors", "Catalog"])   # => "ns=1;s=ExMo.Behaviors.Catalog"
+      path_to_node_id(["EMotion"])                           # => "ns=1;s=EMotion"
+      path_to_node_id(["EMotion", "Behaviors", "Catalog"])   # => "ns=1;s=EMotion.Behaviors.Catalog"
       objects_folder_id()                                  # => "ns=0;i=85"
   """
 
@@ -25,7 +25,7 @@ defmodule EMotion.Projection.OPCUA.NodeId do
     "ns=#{@exmo_ns};s=#{Enum.join(path, ".")}"
   end
 
-  @doc "Returns the namespace index used for ExMo nodes."
+  @doc "Returns the namespace index used for E-Motion nodes."
   @spec exmo_ns() :: non_neg_integer()
   def exmo_ns, do: @exmo_ns
 end

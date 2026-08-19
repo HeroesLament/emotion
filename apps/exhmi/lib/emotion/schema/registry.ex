@@ -1,6 +1,6 @@
 defmodule EMotion.Schema.Registry do
   @moduledoc """
-  Builds the static root ExMo Information Model.
+  Builds the static root E-Motion Information Model.
 
   Contributions from behaviors are merged here. Later, this can be made
   dynamic — behavior modules register themselves, device modules contribute
@@ -31,8 +31,8 @@ defmodule EMotion.Schema.Registry do
     rpp_runtime = FromBehavior.runtime_properties(rpp_def)
 
     %Model{
-      id: "exmo",
-      name: "ExMo Information Model",
+      id: "emotion",
+      name: "E-Motion Information Model",
       version: "0.1.0",
       types: base_types(),
       root: root_object(rpp_catalog, rpp_runtime)
@@ -313,8 +313,8 @@ defmodule EMotion.Schema.Registry do
 
   defp root_object(rpp_catalog, rpp_runtime) do
     %Object{
-      id: "exmo",
-      name: "ExMo",
+      id: "emotion",
+      name: "EMotion",
       children: [
         axes_object(),
         behaviors_object(rpp_catalog, rpp_runtime),

@@ -28,8 +28,8 @@ defmodule EMotion.Projection.JSONRPC.OpenRPC do
 
   ## Usage
 
-      mix exmo.openrpc                 # writes protocol/emotion-protocol.openrpc.json
-      mix exmo.openrpc --check         # fails if the committed file is stale
+      mix emotion.openrpc                 # writes protocol/emotion-protocol.openrpc.json
+      mix emotion.openrpc --check         # fails if the committed file is stale
   """
 
   alias EMotion.Schema.Model
@@ -103,8 +103,8 @@ defmodule EMotion.Projection.JSONRPC.OpenRPC do
       "description" => """
       The JSON-RPC surface of an E-Motion controller.
 
-      GENERATED FILE — do not edit. Produced by `mix exmo.openrpc` from the
-      ExMo Information Model. Change the model, not this document.
+      GENERATED FILE — do not edit. Produced by `mix emotion.openrpc` from the
+      E-Motion Information Model. Change the model, not this document.
 
       ## Layering
 

@@ -1,6 +1,6 @@
 defmodule EMotion.Schema.Object do
   @moduledoc """
-  A hierarchical grouping node in the ExMo Information Model.
+  A hierarchical grouping node in the E-Motion Information Model.
 
   Objects contain children: other Objects, Properties, Methods, or Events.
   Paths are populated by the Compiler's normalize pass.

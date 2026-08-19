@@ -21,7 +21,7 @@ defmodule ExProto.Controller do
 
       ExProto.Controller.start_link(port: 4001)
 
-  or `mix exmo.controller`, which is the same thing with a console attached.
+  or `mix emotion.controller`, which is the same thing with a console attached.
   """
 
   require Logger

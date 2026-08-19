@@ -1,6 +1,6 @@
 defmodule EMotion.InformationModel do
   @moduledoc """
-  Public entrypoint for the ExMo Information Model.
+  Public entrypoint for the E-Motion Information Model.
 
   All external interfaces (OPC-UA, REST, WebSocket, HMI) should derive
   their representations from this model rather than maintaining their own

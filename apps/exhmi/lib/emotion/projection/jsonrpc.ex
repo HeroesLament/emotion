@@ -1,6 +1,6 @@
 defmodule EMotion.Projection.JSONRPC do
   @moduledoc """
-  Projects an ExMo Information Model into the node table a JSON-RPC client
+  Projects an E-Motion Information Model into the node table a JSON-RPC client
   browses, reads, writes and subscribes against.
 
   A sibling of `EMotion.Projection.OPCUA`, and deliberately the same shape: a pure
@@ -233,7 +233,7 @@ defmodule EMotion.Projection.JSONRPC do
   end
 
   # Deliberately the schema id rather than the compiled path. The compiler
-  # derives paths from display *names* — ["ExMo", "Axes", "J1", "Position"] —
+  # derives paths from display *names* — ["EMotion", "Axes", "J1", "Position"] —
   # which is correct for OPC UA browse names and wrong for an identifier a
   # client stores, logs, and types. Ids are already dotted, already stable, and
   # do not move when someone renames a display label.

@@ -1,15 +1,15 @@
-defmodule Mix.Tasks.Exmo.Account do
+defmodule Mix.Tasks.Emotion.Account do
   @moduledoc """
   Administers controller accounts.
 
-      mix exmo.account list
-      mix exmo.account create <username> --role operator
-      mix exmo.account passwd <username>
-      mix exmo.account role <username> <role>
-      mix exmo.account disable <username>
-      mix exmo.account enable <username>
-      mix exmo.account tokens <username>
-      mix exmo.account revoke <username>
+      mix emotion.account list
+      mix emotion.account create <username> --role operator
+      mix emotion.account passwd <username>
+      mix emotion.account role <username> <role>
+      mix emotion.account disable <username>
+      mix emotion.account enable <username>
+      mix emotion.account tokens <username>
+      mix emotion.account revoke <username>
 
   Passwords are generated, never taken as an argument. A password on a command
   line ends up in shell history, in `ps` output for as long as the process
@@ -203,7 +203,7 @@ defmodule Mix.Tasks.Exmo.Account do
         password  #{password}
 
     Shown once. It is stored only as an Argon2id hash and cannot be printed
-    again; `mix exmo.account passwd #{username}` issues a new one.
+    again; `mix emotion.account passwd #{username}` issues a new one.
     """)
   end
 

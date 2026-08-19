@@ -1,6 +1,6 @@
 defmodule EMotion.Projection.OPCUA.Walker do
   @moduledoc """
-  Recursively walks an ExMo Schema tree and emits a flat list of
+  Recursively walks an E-Motion Schema tree and emits a flat list of
   EMotion.Projection.OPCUA.NodeSpec structs.
 
   The first call starts from the root Object, parented under the OPC-UA
@@ -13,7 +13,7 @@ defmodule EMotion.Projection.OPCUA.Walker do
   @doc """
   Walk the model root and return a flat list of NodeSpecs.
 
-  Also emits the root ExMo Object as a child of the OPC-UA Objects folder.
+  Also emits the root E-Motion Object as a child of the OPC-UA Objects folder.
   """
   @spec walk(EMotion.Schema.Model.t()) :: [NodeSpec.t()]
   def walk(%EMotion.Schema.Model{root: root, types: types}) do

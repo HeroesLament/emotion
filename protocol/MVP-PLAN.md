@@ -48,7 +48,7 @@ enable  control_word  quick_stop  fault_reset  master
 ```
 
 **Task 0 — DONE.** The behaviour is `EMotion.Drive`, not `ExDrive.Axis`: the
-namespace was reconciled in the same pass, because `ExMo` was the old name and
+namespace was reconciled in the same pass, because `E-Motion` was the old name and
 the Studio had been `EMotion.*` all along. `Exdrive.Drive` is its first
 implementation, `EMotion.Axis` is the façade the 28 call sites now go through,
 and `EMotion.Drive.for/1` selects a module per axis from config, defaulting to
@@ -166,7 +166,7 @@ FPGA involved. They converge, and building segment emission once serves both.
 | new `ExDrive.CANopen` | implements the Task-0 behaviour; owns node id ↔ axis id |
 | `ExMove.CartesianStream` | emit **segments** rather than per-tick setpoints (the big one) |
 | `ExStore.Cell.JointSetting` | **gear ratio and counts-per-rev have no home today** |
-| `ExMo.Cell` / mastering | counts ↔ radians at the adapter boundary only |
+| `EMotion.Cell` / mastering | counts ↔ radians at the adapter boundary only |
 | `ExProto.Controller` | start an adapter per axis instead of a simulated drive |
 | `apps/metronome` | the SYNC producer is the metronome's job if it is fitted |
 
@@ -212,7 +212,7 @@ is not an I/O service at all but a device driver, and it should be modelled as a
 
 ### Touchpoints once decided
 
-* new `io` object in `ExMo.Schema.Registry` — signals as named nodes, not
+* new `io` object in `EMotion.Schema.Registry` — signals as named nodes, not
   `DO[1]`; the point of an information model is that names travel
 * `ExStore.Cell.Signal` — name, direction, address, invert, default; a signal a
   program refers to must be a **reference**, so `statement_refs` gains a
@@ -234,13 +234,13 @@ Three kinds, and the third is the interesting one:
 The first two are an afternoon on top of the existing kind registry. The third
 is what makes a real cycle time — every incumbent has it (FANUC's `DO[1]=ON`
 inside a motion's option block, ABB's `TriggL`) — and it does not fit the
-current model, because `ExMo.Program.Kind`'s `motion?` flag is binary and
+current model, because `EMotion.Program.Kind`'s `motion?` flag is binary and
 `ExProto.Program.Run` treats every non-motion statement as a barrier.
 
 Recommendation: ship the first two for V1, and record `set_signal_at` as the
 first thing that will bend the statement model, rather than bending it now.
 
-Touchpoints: `ExMo.Program.Kinds` (+3 kinds), `ExMo.Program.Editor` (validate a
+Touchpoints: `EMotion.Program.Kinds` (+3 kinds), `EMotion.Program.Editor` (validate a
 signal reference), `ExProto.Program.Run` (execute + timeout + fault),
 `protocol/PROGRAMS.md` §5.
 
@@ -248,16 +248,16 @@ signal reference), `ExProto.Program.Run` (execute + timeout + fault),
 ## 4. Program upload over the wire
 
 The smallest of the six and the one with the most leverage: today a program can
-only be authored by `mix exmo.program`, which means **Studio cannot put a
+only be authored by `mix emotion.program`, which means **Studio cannot put a
 program on the controller**. That is a hole in the product, not in the code.
 
 The engine, the store, the validation and the refusals all exist —
-`ExMo.Program.Editor` already validates a statement against the kind registry
+`EMotion.Program.Editor` already validates a statement against the kind registry
 at store time. What is missing is an entry point.
 
 ### Touchpoints
 
-* `ExMo.Schema.Registry` — `program.store` (whole program, replacing by name),
+* `EMotion.Schema.Registry` — `program.store` (whole program, replacing by name),
   `program.delete`, guarded by `load_program`/`edit_program`, which already exist
 * `ExProto.Source.Program` — the handler; every refusal already has a shape
 * a struct type for a submitted statement, mirroring `type.statement`
@@ -297,9 +297,9 @@ expression grammar must be able to grow it without a rewrite.
   `(program_id, name)`
 * `ExStore.Program.StatementRef` — a `variable_id` column, so deleting a
   variable a program uses is a **constraint**, exactly as it is for points
-* `ExMo.Program.Kind` — the param type union gains `{:expr, type}`; today a
+* `EMotion.Program.Kind` — the param type union gains `{:expr, type}`; today a
   param is a literal or a reference and there is no third case
-* a new `ExMo.Program.Expr` — parse to an AST, type-check at **store** time,
+* a new `EMotion.Program.Expr` — parse to an AST, type-check at **store** time,
   evaluate at run time. Store-time checking is the whole value: a program that
   cannot fail on a type error halfway down is the difference between this and a
   scripting language
@@ -359,7 +359,7 @@ already makes the graph a query.
 
 ### Touchpoints
 
-`ExMo.Program.Kinds` (+3), `ExMo.Program.Editor` (block nesting, call-graph
+`EMotion.Program.Kinds` (+3), `EMotion.Program.Editor` (block nesting, call-graph
 check), `ExProto.Program.Run` (the flattener, `jump_if_false`, the jump
 barrier), `ExStore.Programs` (fetch the tree, not a flat list), `type.statement`
 (depth or parent, so an editor can render a block), `protocol/PROGRAMS.md`.

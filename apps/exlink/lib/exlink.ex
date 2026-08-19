@@ -5,7 +5,7 @@ defmodule ExLink do
 
   Shipped beside the server rather than written separately, because a protocol
   with one implementation on each side and no shared code is a protocol whose
-  two halves drift. The transport tests, `mix exmo.rpc` and E-Motion Studio all
+  two halves drift. The transport tests, `mix emotion.rpc` and E-Motion Studio all
   come through here, so anything that breaks a client breaks the suite.
 
   ## Its own application, depending on nothing
@@ -85,7 +85,7 @@ defmodule ExLink do
       %{
         "username" => username,
         "password" => password,
-        "label" => Keyword.get(opts, :label, "exmo.rpc CLI")
+        "label" => Keyword.get(opts, :label, "emotion.rpc CLI")
       }
       |> :json.encode()
       |> IO.iodata_to_binary()

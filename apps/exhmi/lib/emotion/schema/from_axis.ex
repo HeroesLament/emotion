@@ -1,7 +1,7 @@
 defmodule EMotion.Schema.FromAxis do
   @moduledoc """
   Converts an axis spec into a schema Object suitable for merging into the
-  ExMo Information Model under the Axes fragment.
+  E-Motion Information Model under the Axes fragment.
 
   Every registered axis gets a standard set of properties derived automatically
   from its spec. No hand-written model fragments required.

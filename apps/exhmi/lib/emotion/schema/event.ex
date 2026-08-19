@@ -1,6 +1,6 @@
 defmodule EMotion.Schema.Event do
   @moduledoc """
-  An event type definition in the ExMo Information Model.
+  An event type definition in the E-Motion Information Model.
 
   Events describe streaming/state-change notifications:
   alarm transitions, behavior lifecycle, printer-ready signals, etc.

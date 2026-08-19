@@ -14,7 +14,7 @@ document exists to close, and it is worth stating plainly before any design.
   * `ExMove.Library.demo/0` — invented proportions, in code, used by the
     controller and the Studio. Its own docstring says it "goes away when the
     URDF loader lands".
-  * `ExMo.Schema.Registry.@arm_axes` — six axes with limits which, per the
+  * `EMotion.Schema.Registry.@arm_axes` — six axes with limits which, per the
     comment above them, "mirror the demo chain".
 
 Three is worse than two. Two copies disagree loudly the first time somebody
@@ -150,7 +150,7 @@ deliberately shuffled.
 
 1. **The parser**, with the tree walk and the refusals. Pure, no storage.
 2. **Storage** — the stored document, and `joint_settings` beside it.
-3. **The cutover** — `ExMo.Cell.chain/0` from the store, `@arm_axes` derived,
+3. **The cutover** — `EMotion.Cell.chain/0` from the store, `@arm_axes` derived,
    drives started from the loaded chain, `Library.demo/0` demoted to a fixture.
 4. **Loading over the protocol.** A URDF is a document, not an argument, so it
    arrives over HTTP like a program body will and for the same reason: it does

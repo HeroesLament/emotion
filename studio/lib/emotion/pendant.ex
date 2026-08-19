@@ -114,7 +114,7 @@ defmodule EMotion.Pendant do
   How each axis reads, for display.
 
   Degrees, because a pendant is for a person and nobody jogs in radians. The
-  wire stays SI — see `ExMo.Schema.FromAxis` on why that is not negotiable —
+  wire stays SI — see `E-Motion.Schema.FromAxis` on why that is not negotiable —
   and this is the one place allowed to convert.
   """
   @spec readout(t(), String.t()) :: String.t()

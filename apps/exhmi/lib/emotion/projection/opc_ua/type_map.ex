@@ -1,6 +1,6 @@
 defmodule EMotion.Projection.OPCUA.TypeMap do
   @moduledoc """
-  Maps ExMo Schema types to OPC-UA data type atoms.
+  Maps E-Motion Schema types to OPC-UA data type atoms.
 
   These atoms correspond to the type identifiers used by ex_opcua's codec.
   Enum refs are projected as :string for the first pass; full enum DataType
@@ -9,7 +9,7 @@ defmodule EMotion.Projection.OPCUA.TypeMap do
 
   alias EMotion.Schema.{Enum, StructType}
 
-  @doc "Maps an ExMo schema type to a UA data type atom."
+  @doc "Maps an E-Motion schema type to a UA data type atom."
   @spec to_ua_type(EMotion.Schema.Type.t(), map()) :: atom()
   def to_ua_type(type, types \\ %{})
 

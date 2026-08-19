@@ -141,7 +141,7 @@ outliving its argument.
   * `base` — the arm's origin. Done.
   * `tool` — the current TCP orientation, re-resolved per tick. Done.
   * `user` — named, stored, re-teachable. Done: rows in the controller's
-    database, resolved through `ExMo.Cell`, and refused rather than silently
+    database, resolved through `EMotion.Cell`, and refused rather than silently
     treated as base when the name is not there.
 
 A frame is six numbers and a name, which made this the smallest piece of work in
@@ -296,7 +296,7 @@ them write Elixir here".
 
 ### Layer 3 — extensions, which are real Elixir and contribute blocks
 
-Compiled Elixir modules that register **new statement kinds**. `ExMo.Behavior` is
+Compiled Elixir modules that register **new statement kinds**. `EMotion.Behavior` is
 already this, one rename away: a definition with a name, typed inputs, observable
 runtime fields and named fault classes is exactly a block's signature.
 

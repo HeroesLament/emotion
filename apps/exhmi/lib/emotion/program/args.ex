@@ -8,7 +8,7 @@ defmodule EMotion.Program.Args do
   is a `:duration`. So the coercion is driven by the **declared type**, never by
   guessing at the string.
 
-  That distinction is not pedantry. `mix exmo.program` guesses — it runs
+  That distinction is not pedantry. `mix emotion.program` guesses — it runs
   `Float.parse/1` and keeps whatever comes back — which is fine for a shell
   where a human sees what they typed, and wrong for a wire where a point
   legitimately named `"12"` would silently become the number 12.0 and then fail

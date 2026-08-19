@@ -38,12 +38,12 @@ live telemetry. The endpoints are listed under `x-bulkTransfer` in the document.
 
 ## Generated, not written
 
-`emotion-protocol.openrpc.json` is produced by `mix exmo.openrpc` from the ExMo
+`emotion-protocol.openrpc.json` is produced by `mix emotion.openrpc` from the E-Motion
 Information Model in `apps/exhmi`. **Do not edit it.** Change the model and
 regenerate.
 
-    mix exmo.openrpc            # write the document
-    mix exmo.openrpc --check    # fail if the committed file is stale
+    mix emotion.openrpc            # write the document
+    mix emotion.openrpc --check    # fail if the committed file is stale
 
 The reason is that the OPC UA projection derives from the same model. Two
 hand-maintained descriptions of one controller agree right up until they don't,

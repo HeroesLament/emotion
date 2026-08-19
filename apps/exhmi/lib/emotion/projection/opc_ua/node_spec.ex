@@ -2,7 +2,7 @@ defmodule EMotion.Projection.OPCUA.NodeSpec do
   @moduledoc """
   Intermediate representation of a projected OPC-UA node.
 
-  This is the output of the ExMo -> OPC-UA projection pass. It is intentionally
+  This is the output of the E-Motion -> OPC-UA projection pass. It is intentionally
   decoupled from the ex_opcua wire layer — it is inspectable, testable, and
   can be fed into NodeManager or AddressSpace independently.
 

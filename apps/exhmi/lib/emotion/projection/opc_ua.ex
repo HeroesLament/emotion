@@ -1,6 +1,6 @@
 defmodule EMotion.Projection.OPCUA do
   @moduledoc """
-  Projects an ExMo Information Model into a flat list of OPC-UA NodeSpecs.
+  Projects an E-Motion Information Model into a flat list of OPC-UA NodeSpecs.
 
   This is a pure transformation — it does not mutate any running server state.
   The resulting NodeSpecs can be inspected/tested standalone, then fed into

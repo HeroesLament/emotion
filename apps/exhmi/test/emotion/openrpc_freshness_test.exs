@@ -7,7 +7,7 @@ defmodule EMotion.OpenRPCFreshnessTest do
   @moduledoc """
   The committed protocol document matches the model it was generated from.
 
-  `mix exmo.openrpc --check` has done this since the task was written, and
+  `mix emotion.openrpc --check` has done this since the task was written, and
   nothing ran it, so a description that changed in the model sat contradicted by
   the published document until someone happened to regenerate. Which is worse
   than no document: a client reading `protocol/emotion-protocol.openrpc.json` has
@@ -31,7 +31,7 @@ defmodule EMotion.OpenRPCFreshnessTest do
 
     path = Path.expand(@path, __DIR__)
 
-    assert File.exists?(path), "#{path} is missing — run `mix exmo.openrpc`"
+    assert File.exists?(path), "#{path} is missing — run `mix emotion.openrpc`"
 
     committed = File.read!(path)
 
@@ -40,7 +40,7 @@ defmodule EMotion.OpenRPCFreshnessTest do
 
     Run:
 
-        mix exmo.openrpc
+        mix emotion.openrpc
 
     and commit the result. Note the controller must be stopped first — it holds
     the OPC UA port the task needs to start the model on.

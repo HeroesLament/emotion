@@ -1,6 +1,6 @@
 defmodule EMotion.Schema.Type do
   @moduledoc """
-  Transport-neutral type descriptors for ExMo schema nodes.
+  Transport-neutral type descriptors for E-Motion schema nodes.
 
   Covers primitives, enums, structs, arrays, and named references.
   References are resolved by the compiler against the model's types registry.

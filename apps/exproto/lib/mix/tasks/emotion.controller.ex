@@ -1,8 +1,8 @@
-defmodule Mix.Tasks.Exmo.Controller do
+defmodule Mix.Tasks.Emotion.Controller do
   @moduledoc """
   Runs an E-Motion controller against the simulated arm.
 
-      mix exmo.controller [--port 4001] [--http] [--enable] [--mode manual]
+      mix emotion.controller [--port 4001] [--http] [--enable] [--mode manual]
 
     * `--port`   — defaults to 4001
     * `--http`   — plaintext, for poking at it with a tool that cannot pin a
@@ -103,7 +103,7 @@ defmodule Mix.Tasks.Exmo.Controller do
           username  #{username}
           password  #{password}
 
-      Shown once. These exist so `mix exmo.controller` is usable immediately;
+      Shown once. These exist so `mix emotion.controller` is usable immediately;
       they are not part of a real deployment, where the only account on first
       boot is the administrator ExAuth.Provision mints.
       """)

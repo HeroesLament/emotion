@@ -1,6 +1,6 @@
 defmodule EMotion.Projection.JSONRPC.TypeMap do
   @moduledoc """
-  Renders ExMo schema types as JSON Schema fragments.
+  Renders E-Motion schema types as JSON Schema fragments.
 
   The sibling of `EMotion.Projection.OPCUA.TypeMap`, and the reason a generated
   admin UI can pick a control without knowing anything about robots: a boolean

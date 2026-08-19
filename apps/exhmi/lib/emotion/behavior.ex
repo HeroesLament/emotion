@@ -1,6 +1,6 @@
 defmodule EMotion.Behavior do
   @moduledoc """
-  Behaviour callback for ExMo behavior modules.
+  Behaviour callback for E-Motion behavior modules.
 
   Any module implementing a behavior contract should implement `definition/0`
   to return an explicit EMotion.Behavior.Definition describing the public surface.
@@ -13,7 +13,7 @@ end
 
 defmodule EMotion.Behavior.Definition do
   @moduledoc """
-  The public contract for an ExMo behavior.
+  The public contract for an E-Motion behavior.
 
   Describes:
   - callable method surface (inputs, outputs)

@@ -1,8 +1,8 @@
 defmodule EMotion.Schema.Model do
   @moduledoc """
-  Root container for the ExMo Information Model.
+  Root container for the E-Motion Information Model.
 
-  `root` is the top-level ExMo Object node.
+  `root` is the top-level E-Motion Object node.
   `types` is a registry of named reusable types keyed by their stable string ID,
   e.g. "type.behavior_phase" → %EMotion.Schema.Enum{}.
   """

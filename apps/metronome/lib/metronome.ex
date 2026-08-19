@@ -1,6 +1,6 @@
 defmodule Metronome do
   @moduledoc """
-  Metronome — host-side interface to the ExMo FPGA motion metronome over USB.
+  Metronome — host-side interface to the E-Motion FPGA motion metronome over USB.
 
   The FPGA (ULX3S ECP5) is the hard-real-time metronome: it holds the trajectory
   look-ahead buffer, interpolates each servo cycle, and runs the CANopen cyclic

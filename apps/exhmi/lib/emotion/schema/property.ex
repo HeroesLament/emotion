@@ -1,6 +1,6 @@
 defmodule EMotion.Schema.Property do
   @moduledoc """
-  A typed, readable/writable/observable value node in the ExMo Information Model.
+  A typed, readable/writable/observable value node in the E-Motion Information Model.
 
   Defaults to readable=true, writable=false, observable=true.
 

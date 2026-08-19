@@ -1,6 +1,6 @@
 defmodule EMotion.Schema.Method do
   @moduledoc """
-  A callable capability node in the ExMo Information Model.
+  A callable capability node in the E-Motion Information Model.
 
   Methods represent machine behaviors invocable from external interfaces.
   `async: true` means the call returns an acceptance envelope immediately;

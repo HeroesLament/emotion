@@ -2,7 +2,7 @@ defmodule ExLinkTest do
   @moduledoc """
   The shipped client, against a real listener.
 
-  ExLink is not test scaffolding — `mix exmo.rpc` uses it and Studio
+  ExLink is not test scaffolding — `mix emotion.rpc` uses it and Studio
   will. So it gets exercised the same way the server does: over TLS, against a
   listener that is actually running.
   """

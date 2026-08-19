@@ -15,7 +15,7 @@ defmodule ExHMI.Application do
       {ExOpcUA.Server, [
         port: port,
         node_manager: ExHMI.Transport.OpcUA,
-        application_name: "ExMo Robot Controller"
+        application_name: "E-Motion Robot Controller"
       ]}
     ]
 

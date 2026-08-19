@@ -13,7 +13,7 @@ defmodule ExHMI.Transport.OpcUA do
   ## Address Space layout (namespace index 1)
 
   Objects/
-  └── ExMo  (object node)
+  └── E-Motion  (object node)
       ├── Joints/
       │   └── J1..J6        (Double, read-only, radians)
       ├── TCP/
@@ -26,13 +26,13 @@ defmodule ExHMI.Transport.OpcUA do
       {ExOpcUA.Server, [
         port: 4840,
         node_manager: ExHMI.Transport.OpcUA,
-        application_name: "ExMo Robot Controller"
+        application_name: "E-Motion Robot Controller"
       ]}
 
   ## Connecting RoboDK
 
   Tools → OPC UA add-in → opc.tcp://<controller-ip>:4840/
-  Browse Objects/ExMo to find all nodes.
+  Browse Objects/E-Motion to find all nodes.
   """
 
   @behaviour ExOpcUA.Server.NodeManager
@@ -46,11 +46,11 @@ defmodule ExHMI.Transport.OpcUA do
 
   @ns 1
 
-  @node_exmo    "ExMo"
-  @node_joints  "ExMo.Joints"
-  @node_tcp     "ExMo.TCP"
-  @node_motion  "ExMo.MotionState"
-  @node_command "ExMo.Command"
+  @node_root    "EMotion"
+  @node_joints  "EMotion.Joints"
+  @node_tcp     "EMotion.TCP"
+  @node_motion  "EMotion.MotionState"
+  @node_command "EMotion.Command"
 
   @joint_names ~w(J1 J2 J3 J4 J5 J6)
   @tcp_names   ~w(X Y Z RX RY RZ)
@@ -70,13 +70,13 @@ defmodule ExHMI.Transport.OpcUA do
   def handle_read(%ReadValueId{node_id: %NodeId{ns: @ns, type: :string, id: id}}) do
     cond do
       id in @joint_node_ids ->
-        "ExMo.Joints." <> name = id
+        "EMotion.Joints." <> name = id
         idx  = Enum.find_index(@joint_names, &(&1 == name)) || 0
         snap = ExHMI.AddressSpace.snapshot()
         NodeManager.double_data_value(Enum.at(snap.joint_positions, idx, 0.0))
 
       id in @tcp_node_ids ->
-        "ExMo.TCP." <> axis = id
+        "EMotion.TCP." <> axis = id
         snap = ExHMI.AddressSpace.snapshot()
         NodeManager.double_data_value(tcp_axis(snap, axis))
 
@@ -87,7 +87,7 @@ defmodule ExHMI.Transport.OpcUA do
       id == @node_command ->
         NodeManager.string_data_value("")
 
-      id in [@node_exmo, @node_joints, @node_tcp] ->
+      id in [@node_root, @node_joints, @node_tcp] ->
         NodeManager.null_data_value()
 
       true ->
@@ -117,11 +117,11 @@ defmodule ExHMI.Transport.OpcUA do
 
   @impl true
   def handle_browse(%BrowseDescription{node_id: %NodeId{ns: 0, id: 85}}) do
-    # Objects folder — return the top-level ExMo object
+    # Objects folder — return the top-level E-Motion object
     %BrowseResult{
       status_code: 0,
       continuation_point: nil,
-      references: [object_ref(@node_exmo, "ExMo")]
+      references: [object_ref(@node_root, "EMotion")]
     }
   end
 
@@ -137,7 +137,7 @@ defmodule ExHMI.Transport.OpcUA do
 
   # ── Browse tree ───────────────────────────────────────────────────────────
 
-  defp browse_children(@node_exmo) do
+  defp browse_children(@node_root) do
     [
       object_ref(@node_joints,  "Joints"),
       object_ref(@node_tcp,     "TCP"),

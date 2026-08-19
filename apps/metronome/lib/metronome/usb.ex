@@ -1,6 +1,6 @@
 defmodule Metronome.USB do
   @moduledoc """
-  Thin, verified wrapper over the `:usb` libusb NIF for the ExMo FPGA metronome.
+  Thin, verified wrapper over the `:usb` libusb NIF for the E-Motion FPGA metronome.
 
   This is the device layer of the metronome app. It enumerates, opens, and
   claims the vendor-class USB device the Stage 1 FPGA firmware presents, and

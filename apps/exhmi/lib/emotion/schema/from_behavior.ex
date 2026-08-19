@@ -1,7 +1,7 @@
 defmodule EMotion.Schema.FromBehavior do
   @moduledoc """
   Converts an EMotion.Behavior.Definition into schema fragments suitable for
-  merging into the ExMo Information Model.
+  merging into the E-Motion Information Model.
 
   Each behavior contributes two fragments:
 

@@ -9,17 +9,17 @@ defmodule EMotion.InformationModelTest do
   describe "compiled_model/0" do
     test "compiles successfully" do
       assert {:ok, model} = InformationModel.compiled_model()
-      assert model.id == "exmo"
+      assert model.id == "emotion"
     end
 
     test "root object has correct name" do
       {:ok, model} = InformationModel.compiled_model()
-      assert model.root.name == "ExMo"
+      assert model.root.name == "EMotion"
     end
 
     test "root path is normalized" do
       {:ok, model} = InformationModel.compiled_model()
-      assert model.root.path == ["ExMo"]
+      assert model.root.path == ["EMotion"]
     end
 
     test "types registry contains behavior_phase enum" do
@@ -32,10 +32,10 @@ defmodule EMotion.InformationModelTest do
     test "child paths are normalized recursively" do
       {:ok, model} = InformationModel.compiled_model()
       behaviors = find_child(model.root, "Behaviors")
-      assert behaviors.path == ["ExMo", "Behaviors"]
+      assert behaviors.path == ["EMotion", "Behaviors"]
 
       catalog = find_child(behaviors, "Catalog")
-      assert catalog.path == ["ExMo", "Behaviors", "Catalog"]
+      assert catalog.path == ["EMotion", "Behaviors", "Catalog"]
     end
   end
 
@@ -131,16 +131,16 @@ defmodule EMotion.InformationModelTest do
       assert length(nodes) > 0
     end
 
-    test "ExMo root object is present", %{nodes: nodes} do
-      node = OPCUA.find(nodes, "ns=1;s=ExMo")
+    test "E-Motion root object is present", %{nodes: nodes} do
+      node = OPCUA.find(nodes, "ns=1;s=EMotion")
       assert node
       assert node.node_class == :object
-      assert node.browse_name == "ExMo"
+      assert node.browse_name == "EMotion"
       assert node.parent_node_id == "ns=0;i=85"
     end
 
     test "Invoke becomes a method node", %{nodes: nodes} do
-      node = OPCUA.find(nodes, "ns=1;s=ExMo.Behaviors.Catalog.RemovePreviousPrint.Invoke")
+      node = OPCUA.find(nodes, "ns=1;s=EMotion.Behaviors.Catalog.RemovePreviousPrint.Invoke")
       assert node
       assert node.node_class      == :method
       assert node.executable      == true
@@ -148,7 +148,7 @@ defmodule EMotion.InformationModelTest do
     end
 
     test "Invoke method carries input and output arg metadata", %{nodes: nodes} do
-      node       = OPCUA.find(nodes, "ns=1;s=ExMo.Behaviors.Catalog.RemovePreviousPrint.Invoke")
+      node       = OPCUA.find(nodes, "ns=1;s=EMotion.Behaviors.Catalog.RemovePreviousPrint.Invoke")
       input_names  = Enum.map(node.input_args,  & &1.name)
       output_names = Enum.map(node.output_args, & &1.name)
       assert "printer_id" in input_names
@@ -156,32 +156,32 @@ defmodule EMotion.InformationModelTest do
     end
 
     test "Phase becomes a variable node", %{nodes: nodes} do
-      node = OPCUA.find(nodes, "ns=1;s=ExMo.Behaviors.Runtime.ActiveBehavior.Phase")
+      node = OPCUA.find(nodes, "ns=1;s=EMotion.Behaviors.Runtime.ActiveBehavior.Phase")
       assert node
       assert node.node_class == :variable
       assert node.data_type  == :string   # enum ref projected as string phase 1
     end
 
     test "K1C_01.ReadyForUnload becomes a variable node", %{nodes: nodes} do
-      node = OPCUA.find(nodes, "ns=1;s=ExMo.Printers.K1C_01.ReadyForUnload")
+      node = OPCUA.find(nodes, "ns=1;s=EMotion.Printers.K1C_01.ReadyForUnload")
       assert node
       assert node.node_class == :variable
       assert node.data_type  == :boolean
     end
 
     test "State.FaultPresent is boolean variable", %{nodes: nodes} do
-      node = OPCUA.find(nodes, "ns=1;s=ExMo.State.FaultPresent")
+      node = OPCUA.find(nodes, "ns=1;s=EMotion.State.FaultPresent")
       assert node
       assert node.node_class == :variable
       assert node.data_type  == :boolean
     end
 
     test "object nodes have correct parent references", %{nodes: nodes} do
-      behaviors = OPCUA.find(nodes, "ns=1;s=ExMo.Behaviors")
-      assert behaviors.parent_node_id == "ns=1;s=ExMo"
+      behaviors = OPCUA.find(nodes, "ns=1;s=EMotion.Behaviors")
+      assert behaviors.parent_node_id == "ns=1;s=EMotion"
 
-      catalog = OPCUA.find(nodes, "ns=1;s=ExMo.Behaviors.Catalog")
-      assert catalog.parent_node_id == "ns=1;s=ExMo.Behaviors"
+      catalog = OPCUA.find(nodes, "ns=1;s=EMotion.Behaviors.Catalog")
+      assert catalog.parent_node_id == "ns=1;s=EMotion.Behaviors"
     end
 
     test "all variable nodes have a data_type", %{nodes: nodes} do

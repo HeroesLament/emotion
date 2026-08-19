@@ -1,6 +1,6 @@
 defmodule EMotion.Controller do
   @moduledoc """
-  DSL for declaring an ExMo machine controller.
+  DSL for declaring an E-Motion machine controller.
 
   Provides `axis/2` and `behaviors/1` macros that accumulate a machine
   definition at compile time. At runtime the module becomes a valid OTP

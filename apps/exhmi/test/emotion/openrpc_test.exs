@@ -42,7 +42,7 @@ defmodule EMotion.Projection.JSONRPC.OpenRPCTest do
       # Whoever opens this file next should learn not to edit it from the file,
       # not from a commit message they will never read.
       assert doc["info"]["description"] =~ "GENERATED FILE"
-      assert doc["info"]["description"] =~ "mix exmo.openrpc"
+      assert doc["info"]["description"] =~ "mix emotion.openrpc"
     end
 
     test "the protocol version is a date and is exposed", %{doc: doc} do

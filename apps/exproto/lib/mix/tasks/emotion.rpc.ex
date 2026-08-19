@@ -1,15 +1,15 @@
-defmodule Mix.Tasks.Exmo.Rpc do
+defmodule Mix.Tasks.Emotion.Rpc do
   @moduledoc """
   Talks to a running controller over the JSON-RPC API.
 
-      mix exmo.rpc login --user operator
-      mix exmo.rpc info
-      mix exmo.rpc browse [nodeId]
-      mix exmo.rpc read <nodeId> [nodeId...]
-      mix exmo.rpc write <nodeId> <value>
-      mix exmo.rpc call <nodeId> [key=value ...]
-      mix exmo.rpc jog <nodeId> <velocity> [--for 3] [--axis z] [--frame tool]
-      mix exmo.rpc watch <nodeId> [nodeId...] [--rate 5] [--for 10]
+      mix emotion.rpc login --user operator
+      mix emotion.rpc info
+      mix emotion.rpc browse [nodeId]
+      mix emotion.rpc read <nodeId> [nodeId...]
+      mix emotion.rpc write <nodeId> <value>
+      mix emotion.rpc call <nodeId> [key=value ...]
+      mix emotion.rpc jog <nodeId> <velocity> [--for 3] [--axis z] [--frame tool]
+      mix emotion.rpc watch <nodeId> [nodeId...] [--rate 5] [--for 10]
 
   Options: `--host` (localhost), `--port` (4001), `--user`, `--insecure`.
 
@@ -127,7 +127,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
       fun.(session, result)
     else
       {:error, :no_token} ->
-        Mix.shell().error("not logged in — run: mix exmo.rpc login --user operator")
+        Mix.shell().error("not logged in — run: mix emotion.rpc login --user operator")
 
       {:error, %{"message" => message}} ->
         Mix.shell().error("controller refused: #{message}")
@@ -269,7 +269,7 @@ defmodule Mix.Tasks.Exmo.Rpc do
         end
 
         if result["async"] do
-          Mix.shell().info("  watch the axis state for the outcome: mix exmo.rpc watch <axis>.state")
+          Mix.shell().info("  watch the axis state for the outcome: mix emotion.rpc watch <axis>.state")
         end
 
       {:ok, _session, %{"error" => error}} ->

@@ -1,6 +1,6 @@
 defmodule ExHMI do
   @moduledoc """
-  ExHMI — Northbound gateway for the ExMo motion controller.
+  ExHMI — Northbound gateway for the E-Motion motion controller.
 
   Exposes arm state and accepts motion commands from external clients
   via OPC UA (primary transport, port 4840).
@@ -12,8 +12,8 @@ defmodule ExHMI do
       # config/config.exs
       config :exhmi, ExHMI.Transport.OpcUA,
         port: 4840,
-        hostname: "exmo-controller",
-        users: [{"admin", "exmo"}],
+        hostname: "emotion-controller",
+        users: [{"admin", "change-me"}],
         tick_ms: 100
 
   ## Pushing telemetry from ExMove

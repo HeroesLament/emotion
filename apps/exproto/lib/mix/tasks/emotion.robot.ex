@@ -1,12 +1,12 @@
-defmodule Mix.Tasks.Exmo.Robot do
+defmodule Mix.Tasks.Emotion.Robot do
   @moduledoc """
   Loads and inspects the robot description this controller is commissioned with.
 
-      mix exmo.robot list
-      mix exmo.robot load <path.urdf> [--name arctos] [--activate]
-      mix exmo.robot show [name]
-      mix exmo.robot wire <joint> <axis> [--name arctos]
-      mix exmo.robot limit <joint> <lower> <upper> [--name arctos]
+      mix emotion.robot list
+      mix emotion.robot load <path.urdf> [--name arctos] [--activate]
+      mix emotion.robot show [name]
+      mix emotion.robot wire <joint> <axis> [--name arctos]
+      mix emotion.robot limit <joint> <lower> <upper> [--name arctos]
 
   A URDF is a document, not an argument, so it arrives here rather than over
   JSON-RPC — the same reasoning `PROGRAMS.md` gives for program bodies, which
@@ -87,7 +87,7 @@ defmodule Mix.Tasks.Exmo.Robot do
             Mix.shell().info("\n  loaded. Restart the controller: the axis nodes come from the")
             Mix.shell().info("  chain, so the address space changes shape with it.\n")
           else
-            Mix.shell().info("\n  not loaded — `mix exmo.robot load #{path} --activate` does that.\n")
+            Mix.shell().info("\n  not loaded — `mix emotion.robot load #{path} --activate` does that.\n")
           end
 
           unwired(robot)
@@ -175,7 +175,7 @@ defmodule Mix.Tasks.Exmo.Robot do
 
     if missing != [] do
       Mix.shell().error("  unwired: #{Enum.join(missing, ", ")}")
-      Mix.shell().error("  a robot with an unwired joint will not load — `mix exmo.robot wire <joint> <axis>`\n")
+      Mix.shell().error("  a robot with an unwired joint will not load — `mix emotion.robot wire <joint> <axis>`\n")
     end
   end
 

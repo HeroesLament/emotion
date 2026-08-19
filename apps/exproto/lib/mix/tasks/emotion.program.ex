@@ -1,24 +1,24 @@
-defmodule Mix.Tasks.Exmo.Program do
+defmodule Mix.Tasks.Emotion.Program do
   @moduledoc """
   Writes program bodies, from a terminal.
 
-      mix exmo.program list
-      mix exmo.program new <name>
-      mix exmo.program show <name>
-      mix exmo.program append <name> <kind> [arg=value ...]
-      mix exmo.program remove <name> <seq>
-      mix exmo.program delete <name>
-      mix exmo.program kinds
+      mix emotion.program list
+      mix emotion.program new <name>
+      mix emotion.program show <name>
+      mix emotion.program append <name> <kind> [arg=value ...]
+      mix emotion.program remove <name> <seq>
+      mix emotion.program delete <name>
+      mix emotion.program kinds
 
   A program body is not on the JSON-RPC link — `PROGRAMS.md` §4 — so authoring
   lives here until the HTTP transfer exists and the block editor speaks it. What
-  *is* on the link is running one: `mix exmo.rpc call program.start name=weld`.
+  *is* on the link is running one: `mix emotion.rpc call program.start name=weld`.
 
-  Arguments are the ones the statement kind declares; `mix exmo.program kinds`
+  Arguments are the ones the statement kind declares; `mix emotion.program kinds`
   lists them. References are given by name, because that is what a person
   taught:
 
-      mix exmo.program append weld move_linear point=weld_start feedrate=0.05
+      mix emotion.program append weld move_linear point=weld_start feedrate=0.05
 
   ## Runs alongside a live controller
 

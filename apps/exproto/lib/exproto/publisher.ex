@@ -57,7 +57,7 @@ defmodule ExProto.Publisher do
   The JSON-RPC method name a value notification carries.
 
   A function rather than a literal in two places. `ExLink` and
-  `mix exmo.rpc` filter incoming frames on this, and when the name lived as a
+  `mix emotion.rpc` filter incoming frames on this, and when the name lived as a
   string at each end the client silently matched nothing — a subscription that
   delivers correctly and a client that shows nothing look identical from the
   outside, which is the worst way to find a typo.

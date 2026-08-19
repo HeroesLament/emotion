@@ -1,12 +1,12 @@
-defmodule Mix.Tasks.Exmo.Openrpc do
+defmodule Mix.Tasks.Emotion.Openrpc do
   @shortdoc "Generates the OpenRPC document from the Information Model"
 
   @moduledoc """
-  Writes the controller's OpenRPC document from the ExMo Information Model.
+  Writes the controller's OpenRPC document from the E-Motion Information Model.
 
-      mix exmo.openrpc            # write the document
-      mix exmo.openrpc --check    # exit non-zero if the committed file is stale
-      mix exmo.openrpc --stdout   # print instead of writing
+      mix emotion.openrpc            # write the document
+      mix emotion.openrpc --check    # exit non-zero if the committed file is stale
+      mix emotion.openrpc --stdout   # print instead of writing
 
   ## Why generated
 
@@ -83,7 +83,7 @@ defmodule Mix.Tasks.Exmo.Openrpc do
 
         The Information Model has changed since it was generated. Run:
 
-            mix exmo.openrpc
+            mix emotion.openrpc
 
         and commit the result.
         """)
@@ -92,7 +92,7 @@ defmodule Mix.Tasks.Exmo.Openrpc do
         Mix.raise("""
         #{Path.relative_to_cwd(path)} does not exist.
 
-        Run `mix exmo.openrpc` and commit the result.
+        Run `mix emotion.openrpc` and commit the result.
         """)
     end
   end

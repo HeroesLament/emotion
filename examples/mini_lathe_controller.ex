@@ -1,6 +1,6 @@
 defmodule MiniLathe do
   @moduledoc """
-  ExMo controller definition for a single-axis mini lathe.
+  E-Motion controller definition for a single-axis mini lathe.
 
   Registers two drives (Z leadscrew + spindle), three behaviors
   (Home, SetSpindleSpeed, Threading), and contributes an axis fragment

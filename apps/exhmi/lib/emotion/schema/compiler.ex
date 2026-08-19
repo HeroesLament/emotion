@@ -1,6 +1,6 @@
 defmodule EMotion.Schema.Compiler do
   @moduledoc """
-  Compiles and validates an ExMo Schema Model.
+  Compiles and validates an E-Motion Schema Model.
 
   Responsibilities:
   - normalize path fields on every node (derived from tree position)

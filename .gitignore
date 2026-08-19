@@ -45,3 +45,5 @@ exmo_hmi.zip
 # Local controller state: dev credential database and self-signed TLS material.
 .emotion/
 .fuse_hidden*
+.scratch/
+studio/.scratch/
