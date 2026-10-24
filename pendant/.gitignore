@@ -1,0 +1,12 @@
+# Packed AtomVM images (rebuilt by mix atomvm.packbeam)
+*.avm
+avm_deps/
+
+# Stock PiBot firmware dumps (vendor binary, kept local only)
+stock/
+
+# Downloaded AtomVM release images
+images/
+
+# Local bring-up scratch output
+.scratch_*
